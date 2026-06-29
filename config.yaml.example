@@ -8,14 +8,74 @@ device:
   name: null              # Explicit null value (recommended)
   # name: ""              # Empty string
   # name:                 # or leave empty
-  
+
   # For specific device, uncomment and set:
   # name: "your-device-serial-here"
   # name: "google-pixel-7-pro:5555"
   # name: "emulator-5554"
 
-# Usage scenarios:
+# Server configuration (optional)
+# Controls how the MCP server is exposed. Defaults shown below.
+# The process stays alive and keeps the ADB connection open across requests,
+# so long-running sessions (e.g. frida) survive client reconnects.
+server:
+  # Transport: "streamable-http" (recommended for HTTP), "stdio", or "sse".
+  transport: "streamable-http"
+
+  # Bind address and port for HTTP transports.
+  #   127.0.0.1 -> local only (recommended: per-analyst PC, no network exposure)
+  #   0.0.0.0   -> reachable from the internal network (ALWAYS set auth_token)
+  host: "127.0.0.1"
+  port: 8000
+
+  # Shared-secret bearer token. When set, every HTTP request must send
+  # "Authorization: Bearer <token>". Leave empty to disable auth.
+  # With host 127.0.0.1 the token is optional defense-in-depth; with 0.0.0.0
+  # it is required. Can also be set via the MCP_AUTH_TOKEN environment variable.
+  auth_token: ""
+
+  # DNS-rebinding protection. List the Host headers (host[:port]) clients use.
+  # When empty, Host-header protection is disabled and the bearer token plus
+  # network binding are relied upon instead.
+  # allowed_hosts:
+  #   - "10.0.0.5:8000"
+  #   - "android-mcp.internal:8000"
+
+  # TLS / HTTPS. Set BOTH to serve HTTPS directly (required to register the
+  # server as a Claude org connector). Use a certificate trusted by the
+  # clients (e.g. issued by your internal CA), with a SAN matching the
+  # hostname clients use. For an internal-network deployment, also set
+  # host: 0.0.0.0 (or the internal IP) so clients can reach it.
+  # Env overrides: MCP_SSL_CERTFILE, MCP_SSL_KEYFILE, MCP_SSL_KEYFILE_PASSWORD.
+  # ssl_certfile: "C:/certs/android-mcp.crt"   # PEM cert (chain incl. intermediates)
+  # ssl_keyfile: "C:/certs/android-mcp.key"    # PEM private key
+  # ssl_keyfile_password: ""                    # only if the key is encrypted
+
+# JADX static-analysis configuration (optional)
+# Used by the jadx_* tools to decompile APKs pulled from the device.
+# jadx and a Java runtime (JRE/JDK 11+) must be installed.
+jadx:
+  # Path to the jadx executable or its bin directory. Can also be set via the
+  # JADX_PATH environment variable. If empty, PATH and common locations are checked.
+  # path: "C:/jadx/bin/jadx.bat"
+
+  # Where pulled APKs and decompiled sources are stored (default: ./workspace).
+  # This dir is shared by the jadx_*, apktool_*, static-analysis, and network tools.
+  # output_dir: "workspace"
+
+# apktool configuration (optional)
+# Used by the apktool_* tools to decode resources/smali. Requires Java.
+apktool:
+  # Path to the apktool executable (apktool.bat). Can also be set via the
+  # APKTOOL_PATH environment variable. If empty, PATH/common dirs are checked.
+  # path: "C:/Users/you/.android-mcp-tools/apktool/apktool.bat"
+
+# Environment variable / CLI overrides (priority: CLI > env > config):
+#   MCP_TRANSPORT, MCP_HOST, MCP_PORT, MCP_AUTH_TOKEN, JADX_PATH, APKTOOL_PATH
+#   --transport, --host, --port
+
+# Device usage scenarios:
 # 1. No config file: Auto-select when only one device connected
-# 2. Config file with name: null or name: "": Auto-select when only one device connected  
+# 2. Config file with name: null or name: "": Auto-select when only one device connected
 # 3. Config file with device.name: "specific-device": Connect to specific device
 # 4. Multiple devices connected without device.name: Will show error and list available devices

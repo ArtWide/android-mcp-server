@@ -1,9 +1,59 @@
 import os
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from PIL import Image as PILImage
 from ppadb.client import Client as AdbClient
+
+# Store screenshots next to this file regardless of CWD
+_HERE = Path(__file__).parent
+SCREENSHOT_PATH = str(_HERE / "screenshot.png")
+COMPRESSED_PATH = str(_HERE / "compressed_screenshot.png")
+
+
+def _discover_adb_executable() -> str | None:
+    adb_path = os.environ.get("ADB_PATH", "").strip()
+    if adb_path:
+        adb_candidate = Path(adb_path)
+        if adb_candidate.is_file():
+            return str(adb_candidate)
+        if adb_candidate.is_dir():
+            candidate = adb_candidate / "adb.exe"
+            if candidate.is_file():
+                return str(candidate)
+
+    which_adb = shutil.which("adb")
+    if which_adb:
+        return which_adb
+
+    common_locations = [
+        Path.home() / "platform-tools" / "adb.exe",
+        Path.home() / "AppData" / "Local" / "Android" / "Sdk" / "platform-tools" / "adb.exe",
+        Path("C:/platform-tools/adb.exe"),
+        Path("C:/Users/user/platform-tools/adb.exe"),
+    ]
+    for candidate in common_locations:
+        if candidate.is_file():
+            return str(candidate)
+
+    return None
+
+
+def _ensure_adb_on_path() -> None:
+    adb_executable = _discover_adb_executable()
+    if not adb_executable:
+        return
+
+    adb_directory = str(Path(adb_executable).parent)
+    current_path = os.environ.get("PATH", "")
+    path_parts = current_path.split(os.pathsep) if current_path else []
+    if adb_directory not in path_parts:
+        os.environ["PATH"] = adb_directory + os.pathsep + current_path if current_path else adb_directory
+
+
+_ensure_adb_on_path()
 
 
 class AdbDeviceManager:
@@ -66,8 +116,7 @@ class AdbDeviceManager:
     def check_adb_installed() -> bool:
         """Check if ADB is installed on the system."""
         try:
-            subprocess.run(["adb", "version"], check=True,
-                           stdout=subprocess.PIPE)
+            subprocess.run(["adb", "version"], check=True, stdout=subprocess.PIPE)
             return True
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
@@ -122,23 +171,77 @@ class AdbDeviceManager:
         result = self.device.shell(command)
         return result
 
-    def take_screenshot(self) -> None:
+    def apk_remote_paths(self, package_name: str) -> list[str]:
+        """Return the on-device APK path(s) for a package via `pm path`."""
+        output = self.device.shell(f"pm path {package_name}")
+        paths = []
+        for line in output.splitlines():
+            line = line.strip()
+            if line.startswith("package:"):
+                paths.append(line[len("package:"):])
+        return paths
+
+    def pull_apk(self, package_name: str, dest_dir, include_splits: bool = False,
+                 reuse: bool = True) -> list:
+        """Pull a package's APK(s) from the device into dest_dir.
+
+        Returns local Path objects, base.apk first. Reuses already-pulled files
+        when reuse=True. Shared by the JADX/apktool/static-analysis tools.
+        """
+        remote_paths = self.apk_remote_paths(package_name)
+        if not remote_paths:
+            raise RuntimeError(
+                f"Package '{package_name}' not found on device (no APK path).")
+
+        remote_paths.sort(key=lambda p: (0 if p.endswith("base.apk") else 1, p))
+        if not include_splits:
+            base = [p for p in remote_paths if p.endswith("base.apk")]
+            remote_paths = base or remote_paths[:1]
+
+        dest = Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+
+        local_apks = []
+        for remote in remote_paths:
+            local = dest / Path(remote).name
+            if not (reuse and local.is_file() and local.stat().st_size > 0):
+                self.device.pull(remote, str(local))
+            local_apks.append(local)
+        return local_apks
+
+    def get_logcat(self, lines: int = 200, filter_spec: str = "",
+                   priority: str = "") -> str:
+        """Dump recent logcat output.
+
+        Args:
+            lines: tail size (most recent N lines).
+            filter_spec: optional tag filter, e.g. "ActivityManager:I *:S".
+            priority: optional minimum priority for all tags (V/D/I/W/E/F).
+        """
+        cmd = f"logcat -d -t {int(lines)}"
+        if priority:
+            cmd += f" *:{priority}"
+        if filter_spec:
+            cmd += f" {filter_spec}"
+        return self.device.shell(cmd)
+
+    def take_screenshot(self) -> str:
         self.device.shell("screencap -p /sdcard/screenshot.png")
-        self.device.pull("/sdcard/screenshot.png", "screenshot.png")
+        self.device.pull("/sdcard/screenshot.png", SCREENSHOT_PATH)
         self.device.shell("rm /sdcard/screenshot.png")
 
         # compressing the ss to avoid "maximum call stack exceeded" error on claude desktop
-        with PILImage.open("screenshot.png") as img:
+        with PILImage.open(SCREENSHOT_PATH) as img:
             width, height = img.size
             new_width = int(width * 0.3)
             new_height = int(height * 0.3)
             resized_img = img.resize(
                 (new_width, new_height), PILImage.Resampling.LANCZOS
             )
-
             resized_img.save(
-                "compressed_screenshot.png", "PNG", quality=85, optimize=True
+                COMPRESSED_PATH, "PNG", quality=85, optimize=True
             )
+        return COMPRESSED_PATH
 
     def get_uilayout(self) -> str:
         self.device.shell("uiautomator dump")

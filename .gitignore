@@ -16,3 +16,15 @@ output.mov
 config.yaml
 test.py
 .coverage
+
+# JADX workspace (pulled APKs + decompiled sources)
+workspace/
+
+# TLS certificates / keys (never commit private keys)
+certs/
+*.key
+*.crt
+*.pem
+
+# Internal KVault documentation (org-internal, not for the repo)
+KVault/

@@ -1,5 +1,7 @@
 # Android MCP Server
 
+> 한국어 문서: [README_kr.md](README_kr.md)
+
 An MCP (Model Context Protocol) server that provides programmatic control over
 Android devices through ADB (Android Debug Bridge). This server exposes
 various Android device management capabilities that can be accessed by MCP
@@ -9,16 +11,63 @@ and Code editors
 
 ## Features
 
-- 🔧 ADB Command Execution
+- 🔧 ADB Command Execution (+ logcat)
 - 📸 Device Screenshot Capture
 - 🎯 UI Layout Analysis
 - 📱 Device Package Management
+- 🧩 JADX Static Analysis (APK → Java, code search)
+- 🔎 androguard Static Analysis (manifest/permissions/exported components, signing, secret scan)
+- 🧱 apktool (resource + smali decoding)
+- 🧬 Frida Dynamic Instrumentation (attach/spawn, script injection, live messages)
+- 🌐 mitmproxy Network Capture (device traffic proxy + flow listing)
+
+31 tools total. See [README_kr.md](README_kr.md) for the full tool tables (Korean).
+
+> **Frida version note:** the host frida bindings and the device frida-server must
+> match (at least on major version). One server process loads a single frida
+> version, so devices needing different frida versions require separate MCP
+> instances (own venv + port). Use `frida_check_compatibility` to detect mismatches.
 
 ## Prerequisites
 
-- Python 3.x
+- Python 3.11+
 - ADB (Android Debug Bridge) installed and configured
-- Android device or emulator (not tested)
+- Android device or emulator
+- (Optional) JADX + Java (JRE/JDK 11+) for the `jadx_*` tools
+- (Optional) Frida host bindings + a matching device frida-server for the `frida_*` tools
+
+### Quick start — one click (Windows)
+
+`start.ps1` (or double-click `start.cmd`) runs the whole sequence — install
+tools (if needed) → register the Claude Desktop connector → start the server:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File start.ps1
+# options: -Frida (push frida-server, needs root), -Port 8123, -NoServer, -SkipSetup
+```
+
+Re-running is safe (setup is skipped when already installed; the connector is
+rewritten only when it changes). Or run the numbered `scripts\0..4` individually:
+
+### One-step environment setup (Windows)
+
+A PowerShell script checks for and installs everything the server can use —
+ADB, Java, JADX, and Frida — without administrator rights:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\0-setup_environment.ps1
+
+# also push a matching frida-server to a connected (rooted) device:
+powershell -ExecutionPolicy Bypass -File scripts\0-setup_environment.ps1 -SetupFridaServer -StartFridaServer
+```
+
+It only installs what is missing and sets the `ADB_PATH` / `JAVA_HOME` /
+`JADX_PATH` / `APKTOOL_PATH` user environment variables. `scripts\3-run_server.ps1`
+loads these into its session automatically, so a fresh terminal is not required.
+
+> For how this is deployed here, connecting Claude Desktop (incl. the Microsoft
+> Store config-path gotcha), the web-connector limitation, and device
+> prerequisites, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Installation
 
@@ -148,6 +197,87 @@ repository
 
 <https://github.com/user-attachments/assets/c45bbc17-f698-43e7-85b4-f1b39b8326a8>
 
+### HTTP server mode (recommended)
+
+The server runs over **Streamable HTTP** as a long-lived process. Because the
+process stays up, the ADB connection is kept open across requests and
+long-running sessions (e.g. `frida`) survive client reconnects — unlike stdio
+mode, where the process is spawned and killed per client.
+
+**Recommended deployment — per-analyst, local only.** Run the server on the same
+PC the target device is attached to, bound to `127.0.0.1`, with Claude Desktop
+on that same machine. This isolates each analyst's device and keeps the powerful
+adb/jadx/frida surface off the network. This is the default.
+
+Start the server:
+
+```powershell
+# convenience launcher (checks for a device, then runs server.py via uv):
+powershell -ExecutionPolicy Bypass -File scripts\3-run_server.ps1
+
+# or run directly:
+uv run server.py                       # streamable-http on 127.0.0.1:8000
+uv run server.py --host 127.0.0.1 --port 8000
+```
+
+Configure it via the `server` section of `config.yaml` (see
+`config.yaml.example`):
+
+```yaml
+server:
+  transport: "streamable-http"   # "stdio" or "sse" also supported
+  host: "127.0.0.1"              # 0.0.0.0 only for trusted-network access
+  port: 8000
+  auth_token: ""                 # require "Authorization: Bearer <token>"
+  # allowed_hosts:               # optional DNS-rebinding allow-list
+  #   - "10.0.0.5:8000"
+  # ssl_certfile: "C:/certs/android-mcp.crt"   # serve HTTPS (see below)
+  # ssl_keyfile: "C:/certs/android-mcp.key"
+```
+
+Settings precedence is **CLI args > environment variables > config.yaml**.
+Environment overrides: `MCP_TRANSPORT`, `MCP_HOST`, `MCP_PORT`, `MCP_AUTH_TOKEN`,
+`MCP_SSL_CERTFILE`, `MCP_SSL_KEYFILE`, `MCP_SSL_KEYFILE_PASSWORD`.
+
+Point an HTTP-capable MCP client at `http://<host>:<port>/mcp`. To keep the
+original local stdio behaviour instead, run with `--transport stdio`.
+
+#### HTTPS (required to register as a Claude org connector)
+
+Registering the server as a Claude **organization connector** requires an
+**HTTPS** URL. Provide a certificate and key and the server serves TLS directly:
+
+```yaml
+server:
+  transport: "streamable-http"
+  host: "0.0.0.0"                # reachable by clients on the internal network
+  port: 8000
+  auth_token: "a-strong-secret" # required once reachable beyond localhost
+  ssl_certfile: "C:/certs/android-mcp.crt"   # PEM cert incl. intermediate chain
+  ssl_keyfile: "C:/certs/android-mcp.key"    # PEM private key
+  # ssl_keyfile_password: ""                  # only if the key is encrypted
+```
+
+- Use a certificate **trusted by the clients** (e.g. issued by your internal CA)
+  whose SAN matches the hostname clients use (e.g. `android-mcp.corp.example`).
+  A self-signed cert only works if the client trusts it; a connector reached by
+  Anthropic's cloud requires a **publicly trusted** CA instead.
+- The host must be reachable by whatever establishes the connector connection,
+  and must have the target device attached (USB) or reachable via network ADB.
+- The server now serves `https://<host>:<port>/mcp`.
+
+> ⚠️ The server currently shares **one device across all clients**. A single
+> org-wide endpoint means every user drives the same device — for multiple
+> analysts/devices, run a per-device instance (separate port + `device.name`).
+
+> ⚠️ **Security**: `execute_adb_shell_command` runs arbitrary shell commands on
+> the device (and with frida, full runtime instrumentation). With the default
+> `127.0.0.1` binding this surface is unreachable from the network. If you bind
+> to `0.0.0.0` for a shared/in-house host, **always** set `auth_token` and
+> restrict access to a trusted network. Note the server currently shares a
+> single device across all clients, so a central multi-analyst host needs a
+> per-device deployment.
+
 ### Available Tools
 
 The server exposes the following tools:
@@ -204,6 +334,89 @@ def get_package_action_intents(package_name: str) -> list[str]:
         Table for the package
     """
 ```
+
+### Static analysis with JADX
+
+The server can decompile an installed app's APK to Java for static analysis,
+using [JADX](https://github.com/skylot/jadx). These tools are optional — the
+server runs fine without JADX installed; the `jadx_*` tools only require it when
+called.
+
+**Setup:**
+
+1. Install a Java runtime (JRE/JDK 11+) and ensure `java` is on `PATH`.
+2. Download a [JADX release](https://github.com/skylot/jadx/releases), unzip it,
+   and set `JADX_PATH` (or `jadx.path` in `config.yaml`) to the `jadx`/`jadx.bat`
+   executable. If `jadx` is already on `PATH`, no configuration is needed.
+
+```yaml
+jadx:
+  path: "C:/jadx/bin/jadx.bat"   # or set the JADX_PATH env var
+  output_dir: "workspace"         # pulled APKs + decompiled sources (git-ignored)
+```
+
+JADX tools:
+
+```python
+def jadx_decompile(package_name: str, include_splits: bool = False) -> str:
+    """Pull a package's APK from the device and decompile it to Java."""
+
+def jadx_list_decompiled() -> list[str]:
+    """List packages already decompiled in the workspace."""
+
+def jadx_search_code(package_name: str, pattern: str, max_results: int = 100) -> str:
+    """Regex-search the decompiled Java sources of a package."""
+
+def jadx_read_source(package_name: str, relative_path: str) -> str:
+    """Read one decompiled Java source file."""
+```
+
+Typical flow: `jadx_decompile("com.example.app")` →
+`jadx_search_code("com.example.app", "password")` →
+`jadx_read_source("com.example.app", "com/example/app/LoginActivity.java")`.
+
+### Dynamic instrumentation with Frida
+
+The server can drive [Frida](https://frida.re/) against the device for runtime
+hooking. Because the HTTP server is long-lived, **Frida sessions are kept alive
+in the server and survive Claude Desktop reconnects** — this is the main reason
+the server runs over HTTP rather than per-spawn stdio.
+
+**Setup:** the host `frida` bindings are a project dependency (installed by
+`uv sync` / `0-setup_environment.ps1`). The device needs a **matching-major
+frida-server** running (rooted device). The dedicated
+`scripts\1-setup_frida_server.ps1` checks the connected device's ABI/root, compares
+its frida-server version with the host frida, and pushes the matching build
+(add `-Start` to launch it on a rooted device); `0-setup_environment.ps1
+-SetupFridaServer` delegates to it.
+
+Frida tools:
+
+```python
+frida_check_compatibility()                # host frida vs device frida-server version
+frida_list_devices()                       # devices visible to Frida
+frida_list_processes()                      # running processes
+frida_list_applications()                   # installed apps
+frida_attach(target)                        # attach by name/PID -> session_id
+frida_spawn(package_name)                   # spawn suspended      -> session_id
+frida_run_script(session_id, script_source) # inject JS; resumes spawned procs
+frida_read_messages(session_id)             # drain script send()/error output
+frida_resume(session_id)                    # resume a spawned process
+frida_list_sessions()                       # active sessions
+frida_detach(session_id)                    # detach + drop session
+```
+
+Typical flow:
+
+```
+1. frida_spawn("com.example.app")                       -> session_id
+2. frida_run_script(session_id, "<JS that calls send()>")  (injects + resumes)
+3. frida_read_messages(session_id)                       (repeat to poll output)
+4. frida_detach(session_id)
+```
+
+> ⚠️ **Version match**: the host frida and device frida-server **major versions
+> must match**, or sessions fail to start.
 
 ## Contributing
 

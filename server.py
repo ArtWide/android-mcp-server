@@ -1,51 +1,237 @@
+import argparse
 import os
 import sys
 
 import yaml
 from mcp.server.fastmcp import FastMCP, Image
+from mcp.server.transport_security import TransportSecuritySettings
 
 from adbdevicemanager import AdbDeviceManager
+from apktoolmanager import ApktoolManager
+from fridamanager import FridaManager
+from jadxmanager import JadxManager
+from networkmanager import NetworkCaptureManager
+from staticmanager import StaticAnalysisManager
 
 CONFIG_FILE = "config.yaml"
 CONFIG_FILE_EXAMPLE = "config.yaml.example"
 
-# Load config (make config file optional)
-config = {}
-device_name = None
+# Defaults for the HTTP server. These can be overridden by config.yaml,
+# environment variables, or command line arguments (in increasing priority).
+DEFAULT_TRANSPORT = "streamable-http"
+# Bind to loopback by default: the recommended deployment is per-analyst on a
+# personal PC, where the target device and Claude Desktop are on the same
+# machine. This keeps the powerful adb/jadx/frida surface off the network.
+# Override with host: "0.0.0.0" (+ auth_token) only for trusted-network setups.
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8000
 
-if os.path.exists(CONFIG_FILE):
+
+def _load_config() -> dict:
+    """Load config.yaml if present. The file is optional."""
+    if not os.path.exists(CONFIG_FILE):
+        print(
+            f"Config file {CONFIG_FILE} not found, using defaults "
+            "(auto-select device, streamable-http transport)")
+        return {}
+
     try:
         with open(CONFIG_FILE) as f:
-            config = yaml.safe_load(f.read()) or {}
-        device_config = config.get("device", {})
-        configured_device_name = device_config.get(
-            "name") if device_config else None
-
-        # Support multiple ways to specify auto-selection:
-        # 1. name: null (None in Python)
-        # 2. name: "" (empty string)
-        # 3. name field completely missing
-        if configured_device_name and configured_device_name.strip():
-            device_name = configured_device_name.strip()
-            print(f"Loaded config from {CONFIG_FILE}")
-            print(f"Configured device: {device_name}")
-        else:
-            print(f"Loaded config from {CONFIG_FILE}")
-            print(
-                "No device specified in config, will auto-select if only one device connected")
+            return yaml.safe_load(f.read()) or {}
     except Exception as e:
         print(f"Error loading config file {CONFIG_FILE}: {e}", file=sys.stderr)
         print(
-            f"Please check the format of your config file or recreate it from {CONFIG_FILE_EXAMPLE}", file=sys.stderr)
+            f"Please check the format of your config file or recreate it from "
+            f"{CONFIG_FILE_EXAMPLE}", file=sys.stderr)
         sys.exit(1)
-else:
-    print(
-        f"Config file {CONFIG_FILE} not found, using auto-selection for device")
 
-# Initialize MCP and device manager
-# AdbDeviceManager will handle auto-selection if device_name is None
-mcp = FastMCP("android")
+
+def _resolve_device_name(config: dict) -> str | None:
+    """Resolve the configured device name, or None for auto-selection."""
+    device_config = config.get("device") or {}
+    configured = device_config.get("name")
+    if configured and str(configured).strip():
+        name = str(configured).strip()
+        print(f"Configured device: {name}")
+        return name
+    print("No device specified, will auto-select if only one device connected")
+    return None
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Android MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http", "sse"],
+        default=None,
+        help="MCP transport to use (default: from config or streamable-http)")
+    parser.add_argument("--host", default=None,
+                        help="Host/IP to bind for HTTP transports")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Port to bind for HTTP transports")
+    # Ignore unknown args so the module stays importable under test runners.
+    args, _ = parser.parse_known_args()
+    return args
+
+
+def _server_settings(config: dict, args: argparse.Namespace) -> dict:
+    """Merge server settings from config, env vars, and CLI args.
+
+    Priority (low to high): config.yaml < environment < CLI arguments.
+    """
+    server_config = config.get("server") or {}
+
+    transport = (
+        args.transport
+        or os.environ.get("MCP_TRANSPORT")
+        or server_config.get("transport")
+        or DEFAULT_TRANSPORT)
+
+    host = (
+        args.host
+        or os.environ.get("MCP_HOST")
+        or server_config.get("host")
+        or DEFAULT_HOST)
+
+    port = (
+        args.port
+        or os.environ.get("MCP_PORT")
+        or server_config.get("port")
+        or DEFAULT_PORT)
+    port = int(port)
+
+    # Shared-secret bearer token. If empty/None, auth is disabled.
+    auth_token = (
+        os.environ.get("MCP_AUTH_TOKEN")
+        or server_config.get("auth_token")
+        or "")
+    auth_token = str(auth_token).strip()
+
+    # Hosts allowed in the Host header (DNS-rebinding protection). When empty
+    # and we bind to a non-loopback address, we can't enumerate every valid
+    # Host header, so protection is disabled and we rely on the bearer token
+    # plus network-level binding instead.
+    allowed_hosts = server_config.get("allowed_hosts") or []
+
+    # TLS: serve HTTPS directly when both a certificate and key are provided.
+    # Use a cert trusted by the clients (e.g. your internal CA).
+    ssl_certfile = (
+        os.environ.get("MCP_SSL_CERTFILE")
+        or server_config.get("ssl_certfile")
+        or "")
+    ssl_keyfile = (
+        os.environ.get("MCP_SSL_KEYFILE")
+        or server_config.get("ssl_keyfile")
+        or "")
+    ssl_keyfile_password = (
+        os.environ.get("MCP_SSL_KEYFILE_PASSWORD")
+        or server_config.get("ssl_keyfile_password")
+        or "")
+
+    return {
+        "transport": transport,
+        "host": host,
+        "port": port,
+        "auth_token": auth_token,
+        "allowed_hosts": list(allowed_hosts),
+        "ssl_certfile": str(ssl_certfile).strip(),
+        "ssl_keyfile": str(ssl_keyfile).strip(),
+        "ssl_keyfile_password": str(ssl_keyfile_password),
+    }
+
+
+class TokenAuthMiddleware:
+    """Pure-ASGI middleware enforcing a shared bearer token on HTTP requests.
+
+    Implemented as raw ASGI (not BaseHTTPMiddleware) so it does not buffer the
+    streaming responses used by the streamable-http / SSE transports. Non-HTTP
+    scopes (lifespan, websocket) are passed straight through.
+    """
+
+    def __init__(self, app, token: str) -> None:
+        self.app = app
+        self.expected = f"Bearer {token}"
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        authorization = headers.get(b"authorization", b"").decode("latin-1")
+        if authorization != self.expected:
+            await send({
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"www-authenticate", b"Bearer"),
+                ],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b'{"error":"unauthorized"}',
+            })
+            return
+
+        await self.app(scope, receive, send)
+
+
+# Load configuration and resolve runtime settings.
+_config = _load_config()
+_args = _parse_args()
+_settings = _server_settings(_config, _args)
+device_name = _resolve_device_name(_config)
+
+# Configure DNS-rebinding protection for the HTTP transports.
+if _settings["allowed_hosts"]:
+    transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_settings["allowed_hosts"],
+        allowed_origins=_settings["allowed_hosts"],
+    )
+else:
+    # No explicit allow-list: disable Host-header protection and rely on the
+    # bearer token + network binding. (Loopback-only setups are still safe.)
+    transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=False)
+
+# Initialize MCP and device manager.
+# AdbDeviceManager auto-selects the device when device_name is None. The
+# manager is created once and reused for the lifetime of the process, so the
+# ADB connection stays alive across requests (unlike per-spawn stdio usage).
+mcp = FastMCP(
+    "android",
+    host=_settings["host"],
+    port=_settings["port"],
+    transport_security=transport_security,
+)
 deviceManager = AdbDeviceManager(device_name)
+
+# JADX static-analysis manager. Constructed lazily-tolerant: it does not require
+# jadx/Java at startup, only when a jadx_* tool is actually called.
+_jadx_config = _config.get("jadx") or {}
+jadxManager = JadxManager(
+    deviceManager,
+    jadx_path=os.environ.get("JADX_PATH") or _jadx_config.get("path") or None,
+    output_dir=_jadx_config.get("output_dir") or None,
+)
+
+# Frida dynamic-instrumentation manager. Keeps sessions alive in-process across
+# requests; tolerant of frida being absent until a frida_* tool is called.
+fridaManager = FridaManager(deviceManager)
+
+# Static analysis (androguard), apktool, and network capture (mitmproxy). All
+# share the JADX workspace dir and tolerate their external tools being absent.
+_workspace = _jadx_config.get("output_dir") or None
+staticManager = StaticAnalysisManager(deviceManager, output_dir=_workspace)
+_apktool_config = _config.get("apktool") or {}
+apktoolManager = ApktoolManager(
+    deviceManager,
+    apktool_path=os.environ.get("APKTOOL_PATH") or _apktool_config.get("path") or None,
+    output_dir=_workspace,
+)
+networkManager = NetworkCaptureManager(deviceManager, output_dir=_workspace)
 
 
 @mcp.tool()
@@ -91,8 +277,11 @@ def get_screenshot() -> Image:
     Returns:
         Image: the screenshot
     """
-    deviceManager.take_screenshot()
-    return Image(path="compressed_screenshot.png")
+    try:
+        path = deviceManager.take_screenshot()
+        return Image(path=path)
+    except Exception as e:
+        raise RuntimeError(f"Failed to capture screenshot: {e}") from e
 
 
 @mcp.tool()
@@ -108,5 +297,358 @@ def get_package_action_intents(package_name: str) -> list[str]:
     return result
 
 
+@mcp.tool()
+def jadx_decompile(package_name: str, include_splits: bool = False) -> str:
+    """Pull a package's APK from the device and decompile it to Java with JADX.
+
+    Run this once per package before using jadx_search_code or jadx_read_source.
+    Args:
+        package_name (str): The package to decompile (e.g. 'com.example.app')
+        include_splits (bool): Also pull split APKs (default: base.apk only)
+    Returns:
+        str: A summary including the output directory and decompiled file count
+    """
+    return jadxManager.decompile(package_name, include_splits=include_splits)
+
+
+@mcp.tool()
+def jadx_list_decompiled() -> list[str]:
+    """List packages already decompiled in the workspace.
+    Returns:
+        list[str]: Package names that have decompiled sources available
+    """
+    return jadxManager.list_decompiled()
+
+
+@mcp.tool()
+def jadx_search_code(package_name: str, pattern: str, max_results: int = 100) -> str:
+    """Regex-search the decompiled Java sources of a previously decompiled package.
+    Args:
+        package_name (str): The decompiled package to search
+        pattern (str): A Python regular expression
+        max_results (int): Maximum number of matching lines to return
+    Returns:
+        str: Matches formatted as 'relative/path.java:line: snippet'
+    """
+    return jadxManager.search_code(pattern, package_name, max_results=max_results)
+
+
+@mcp.tool()
+def jadx_read_source(package_name: str, relative_path: str) -> str:
+    """Read one decompiled Java source file from a decompiled package.
+    Args:
+        package_name (str): The decompiled package
+        relative_path (str): Path to the .java file relative to the sources root
+                             (as shown by jadx_search_code)
+    Returns:
+        str: The full contents of the source file
+    """
+    return jadxManager.read_source(package_name, relative_path)
+
+
+@mcp.tool()
+def frida_list_devices() -> str:
+    """List devices visible to Frida (usb/remote/local).
+    Returns:
+        str: One line per device as 'id\\ttype\\tname'
+    """
+    return fridaManager.list_devices()
+
+
+@mcp.tool()
+def frida_check_compatibility(server_path: str = "/data/local/tmp/frida-server") -> str:
+    """Check that the host frida version matches the device's frida-server.
+
+    Reports the host frida version, whether frida-server is running, the device
+    frida-server version, and whether they are compatible. Use this first when
+    Frida attach/spawn fails.
+    Args:
+        server_path (str): Path to frida-server on the device
+    Returns:
+        str: A version/compatibility report
+    """
+    return fridaManager.check_compatibility(server_path)
+
+
+@mcp.tool()
+def frida_list_processes() -> str:
+    """List running processes on the device via Frida.
+    Returns:
+        str: One line per process as 'pid\\tname'
+    """
+    return fridaManager.list_processes()
+
+
+@mcp.tool()
+def frida_list_applications() -> str:
+    """List installed applications on the device via Frida.
+    Returns:
+        str: One line per app as 'pid\\tidentifier\\tname' (pid '-' if not running)
+    """
+    return fridaManager.list_applications()
+
+
+@mcp.tool()
+def frida_attach(target: str) -> str:
+    """Attach Frida to a running process by name or PID.
+
+    The session is kept alive in the server. Inject code with frida_run_script.
+    Args:
+        target (str): Process name (e.g. 'com.example.app') or PID
+    Returns:
+        str: Confirmation including the session_id to use in later calls
+    """
+    return fridaManager.attach(target)
+
+
+@mcp.tool()
+def frida_spawn(package_name: str) -> str:
+    """Spawn an app suspended and attach Frida to it.
+
+    Use this to hook early startup. The process stays suspended until
+    frida_run_script (which resumes after loading) or frida_resume.
+    Args:
+        package_name (str): The app package to spawn (e.g. 'com.example.app')
+    Returns:
+        str: Confirmation including the session_id and pid
+    """
+    return fridaManager.spawn(package_name)
+
+
+@mcp.tool()
+def frida_run_script(session_id: str, script_source: str) -> str:
+    """Inject and load a Frida JavaScript instrumentation script into a session.
+
+    Emit data from the script with send(...); read it back with
+    frida_read_messages. If the session was spawned, the process is resumed
+    after the script loads.
+    Args:
+        session_id (str): A session_id from frida_attach or frida_spawn
+        script_source (str): Frida JavaScript source to load
+    Returns:
+        str: Load status
+    """
+    return fridaManager.run_script(session_id, script_source)
+
+
+@mcp.tool()
+def frida_read_messages(session_id: str) -> str:
+    """Drain buffered messages emitted by a session's script (send()/errors).
+    Args:
+        session_id (str): A session_id with a loaded script
+    Returns:
+        str: The buffered messages, or a notice if there are none
+    """
+    return fridaManager.read_messages(session_id)
+
+
+@mcp.tool()
+def frida_resume(session_id: str) -> str:
+    """Resume a spawned, still-suspended process without injecting a script.
+    Args:
+        session_id (str): A session_id from frida_spawn
+    Returns:
+        str: Resume status
+    """
+    return fridaManager.resume(session_id)
+
+
+@mcp.tool()
+def frida_list_sessions() -> str:
+    """List active Frida sessions held by the server.
+    Returns:
+        str: One line per session as 'session_id\\tpid\\ttarget\\tscript-state'
+    """
+    return fridaManager.list_sessions()
+
+
+@mcp.tool()
+def frida_detach(session_id: str) -> str:
+    """Detach a Frida session and remove it from the server registry.
+    Args:
+        session_id (str): The session to detach
+    Returns:
+        str: Detach status
+    """
+    return fridaManager.detach(session_id)
+
+
+@mcp.tool()
+def get_logcat(lines: int = 200, filter_spec: str = "", priority: str = "") -> str:
+    """Dump recent logcat output from the device.
+    Args:
+        lines (int): Number of most-recent lines to return
+        filter_spec (str): Optional tag filter, e.g. 'ActivityManager:I *:S'
+        priority (str): Optional minimum priority for all tags (V/D/I/W/E/F)
+    Returns:
+        str: The logcat output
+    """
+    return deviceManager.get_logcat(lines=lines, filter_spec=filter_spec, priority=priority)
+
+
+@mcp.tool()
+def analyze_manifest(package_name: str) -> str:
+    """Static analysis of a package's manifest: permissions, exported components,
+    debuggable/allowBackup/cleartext flags, and SDK levels (via androguard).
+    Args:
+        package_name (str): The package to analyze
+    Returns:
+        str: A formatted manifest/permission/attack-surface summary
+    """
+    return staticManager.analyze_manifest(package_name)
+
+
+@mcp.tool()
+def apk_info(package_name: str) -> str:
+    """APK signing and metadata: signing certificates, SHA-256, version, sign state.
+    Args:
+        package_name (str): The package to inspect
+    Returns:
+        str: Signing certificate details and APK hashes
+    """
+    return staticManager.apk_info(package_name)
+
+
+@mcp.tool()
+def scan_secrets(package_name: str) -> str:
+    """Scan a package's dex strings for hardcoded secrets and endpoints
+    (API keys, tokens, private keys, URLs, IPs).
+    Args:
+        package_name (str): The package to scan
+    Returns:
+        str: Categorized matches found in the app's code strings
+    """
+    return staticManager.scan_secrets(package_name)
+
+
+@mcp.tool()
+def apktool_decode(package_name: str) -> str:
+    """Decode a package's APK with apktool (resources + decoded manifest + smali).
+    Run once per package before apktool_list_files / apktool_read_file.
+    Args:
+        package_name (str): The package to decode
+    Returns:
+        str: A summary including the output directory
+    """
+    return apktoolManager.decode(package_name)
+
+
+@mcp.tool()
+def apktool_list_files(package_name: str, subdir: str = "") -> str:
+    """List files in a package's apktool-decoded output.
+    Args:
+        package_name (str): A previously decoded package
+        subdir (str): Optional subdirectory (e.g. 'res/values', 'smali')
+    Returns:
+        str: Directory listing relative to the decoded root
+    """
+    return apktoolManager.list_files(package_name, subdir=subdir)
+
+
+@mcp.tool()
+def apktool_read_file(package_name: str, relative_path: str) -> str:
+    """Read one file from a package's apktool-decoded output (manifest, xml, smali).
+    Args:
+        package_name (str): A previously decoded package
+        relative_path (str): Path relative to the decoded root
+                             (e.g. 'AndroidManifest.xml')
+    Returns:
+        str: The file contents
+    """
+    return apktoolManager.read_file(package_name, relative_path)
+
+
+@mcp.tool()
+def network_start_capture(port: int = 8080) -> str:
+    """Start capturing the device's network traffic via mitmproxy.
+
+    Routes the device's HTTP(S) traffic through mitmdump using adb reverse and a
+    device proxy setting. HTTPS requires the mitmproxy CA trusted on the device.
+    Args:
+        port (int): Proxy port (default 8080)
+    Returns:
+        str: Capture status and next-step guidance
+    """
+    return networkManager.start_capture(port=port)
+
+
+@mcp.tool()
+def network_list_flows(limit: int = 50) -> str:
+    """List recently captured network flows (method, status, URL, sizes).
+    Args:
+        limit (int): Maximum number of most-recent flows to return
+    Returns:
+        str: One line per captured request/response
+    """
+    return networkManager.list_flows(limit=limit)
+
+
+@mcp.tool()
+def network_stop_capture() -> str:
+    """Stop the network capture and clear the device proxy / adb reverse.
+    Returns:
+        str: Stop status
+    """
+    return networkManager.stop_capture()
+
+
+@mcp.tool()
+def network_status() -> str:
+    """Report whether a network capture is currently running.
+    Returns:
+        str: Capture status
+    """
+    return networkManager.status()
+
+
+def _run_http(transport: str) -> None:
+    """Run an HTTP transport, optionally wrapped with token auth."""
+    import uvicorn
+
+    if transport == "sse":
+        app = mcp.sse_app()
+        path = _settings.get("sse_path", "/sse")
+    else:
+        app = mcp.streamable_http_app()
+        path = "/mcp"
+
+    token = _settings["auth_token"]
+    if token:
+        app = TokenAuthMiddleware(app, token)
+        print("Bearer token authentication: ENABLED")
+    else:
+        print("Bearer token authentication: DISABLED (no auth_token configured)")
+
+    # TLS: enable HTTPS when both a certificate and key are configured.
+    uvicorn_kwargs: dict = {}
+    certfile = _settings.get("ssl_certfile")
+    keyfile = _settings.get("ssl_keyfile")
+    if certfile and keyfile:
+        for label, p in (("ssl_certfile", certfile), ("ssl_keyfile", keyfile)):
+            if not os.path.isfile(p):
+                print(f"TLS {label} not found: {p}", file=sys.stderr)
+                sys.exit(1)
+        uvicorn_kwargs["ssl_certfile"] = certfile
+        uvicorn_kwargs["ssl_keyfile"] = keyfile
+        if _settings.get("ssl_keyfile_password"):
+            uvicorn_kwargs["ssl_keyfile_password"] = _settings["ssl_keyfile_password"]
+        scheme = "https"
+    elif certfile or keyfile:
+        print("TLS requires BOTH ssl_certfile and ssl_keyfile; ignoring partial "
+              "TLS config and serving plain HTTP.", file=sys.stderr)
+        scheme = "http"
+    else:
+        scheme = "http"
+
+    host, port = _settings["host"], _settings["port"]
+    print(f"Starting Android MCP Server ({transport}) on {scheme}://{host}:{port}{path}")
+    uvicorn.run(app, host=host, port=port, log_level="info", **uvicorn_kwargs)
+
+
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    transport = _settings["transport"]
+    if transport == "stdio":
+        print("Starting Android MCP Server (stdio)")
+        mcp.run(transport="stdio")
+    else:
+        _run_http(transport)
