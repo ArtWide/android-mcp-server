@@ -113,6 +113,22 @@ if ($SkipRegister) {
     Invoke-Step "2-register_claude_desktop.ps1" @("-Port", "$Port")
 }
 
+# Ensure the Claude Code skill is present in the global skills folder
+# (~/.claude/skills/android-analysis). Always checked, added only if missing.
+Banner "skill" "Ensuring Claude Code skill (android-analysis)"
+$skillSrc = Join-Path $RepoDir "skills\android-analysis"
+$skillDest = Join-Path $env:USERPROFILE ".claude\skills\android-analysis"
+$skillDestFile = Join-Path $skillDest "SKILL.md"
+if (Test-Path $skillDestFile) {
+    Write-Host "    [OK] Skill already installed: $skillDestFile" -ForegroundColor Green
+} elseif (Test-Path (Join-Path $skillSrc "SKILL.md")) {
+    New-Item -ItemType Directory -Force -Path $skillDest | Out-Null
+    Copy-Item -Path (Join-Path $skillSrc "*") -Destination $skillDest -Recurse -Force
+    Write-Host "    [OK] Installed skill -> $skillDestFile" -ForegroundColor Green
+} else {
+    Write-Host "    [!] Skill source not found: $skillSrc" -ForegroundColor Yellow
+}
+
 # Step 3: run the server (foreground).
 if ($NoServer) {
     Banner 3 "Setup complete (-NoServer). Start later with scripts\3-run_server.ps1"
