@@ -76,15 +76,19 @@ class ApktoolManager:
     def _out_dir(self, package_name: str) -> Path:
         return self.output_dir / package_name / "apktool"
 
-    def decode(self, package_name: str) -> str:
+    def decode(self, target: str) -> str:
+        """Decode an APK with apktool.
+
+        `target` is an installed package name OR a path to a local .apk file.
+        Returns the workspace key for apktool_list_files / apktool_read_file.
+        """
+        from apkutils import resolve_apk
         apktool = self._resolve()
         self._check_java()
 
-        apk_dir = self.output_dir / package_name / "apk"
-        apks = self.device_manager.pull_apk(package_name, apk_dir, include_splits=False)
-        apk = apks[0]
+        apk, key = resolve_apk(self.device_manager, target, self.output_dir)
 
-        out = self._out_dir(package_name)
+        out = self._out_dir(key)
         if out.exists():
             shutil.rmtree(out, ignore_errors=True)
         out.mkdir(parents=True, exist_ok=True)
@@ -108,11 +112,12 @@ class ApktoolManager:
                      if "Press any key" not in l]
         tail = "\n".join(log_lines[-5:])
         return (
-            f"Decoded '{package_name}' with apktool\n"
+            f"Decoded '{target}' with apktool (key: {key})\n"
             f"  APK: {apk}\n"
             f"  Output: {out}\n"
             f"  AndroidManifest.xml: {manifest}, res/: {res_exists}, smali dirs: {smali_dirs}\n"
             f"  Status: {status}\n"
+            f"  Use apktool_list_files/apktool_read_file with package_name='{key}'.\n"
             f"  apktool log (tail):\n{tail}"
         )
 

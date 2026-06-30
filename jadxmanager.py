@@ -127,15 +127,20 @@ class JadxManager:
         return local_apks
 
     # ----- public operations --------------------------------------------------
-    def decompile(self, package_name: str, include_splits: bool = False) -> str:
-        """Pull the APK for a package and decompile it with jadx."""
+    def decompile(self, target: str, include_splits: bool = False) -> str:
+        """Decompile an APK with jadx.
+
+        `target` is an installed package name OR a path to a local .apk file.
+        Returns the workspace key to pass to jadx_search_code / jadx_read_source.
+        """
+        from apkutils import resolve_apk
         jadx = self._resolve_jadx()
         self._check_java()
 
-        local_apks = self._pull_apk(package_name, include_splits)
-        primary_apk = local_apks[0]
+        primary_apk, key = resolve_apk(
+            self.device_manager, target, self.output_dir, include_splits)
 
-        src_dir = self.output_dir / package_name / "src"
+        src_dir = self.output_dir / key / "src"
         if src_dir.exists():
             shutil.rmtree(src_dir, ignore_errors=True)
         src_dir.mkdir(parents=True, exist_ok=True)
@@ -156,11 +161,12 @@ class JadxManager:
         status = "ok" if java_files else f"no sources produced (exit {proc.returncode})"
         tail = "\n".join(proc.stdout.splitlines()[-5:]) if proc.stdout else ""
         return (
-            f"Decompiled '{package_name}'\n"
+            f"Decompiled '{target}' (key: {key})\n"
             f"  APK: {primary_apk}\n"
             f"  Output: {src_dir}\n"
             f"  Java files: {len(java_files)}\n"
             f"  Status: {status}\n"
+            f"  Use jadx_search_code/jadx_read_source with package_name='{key}'.\n"
             f"  jadx log (tail):\n{tail}"
         )
 

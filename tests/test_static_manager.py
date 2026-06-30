@@ -46,6 +46,42 @@ class TestScanSecrets:
         assert "No matches" in out
 
 
+class TestDropperIndicators:
+    def test_high_with_payload_url(self, tmp_path):
+        mgr = _mgr(tmp_path)
+        apk = MagicMock()
+        apk.get_permissions.return_value = ["android.permission.INTERNET"]
+        strings = {"http://evil.example/payload.apk",
+                   "Ldalvik/system/DexClassLoader;", "normal string"}
+        with patch.object(mgr, "_load", return_value=apk), \
+                patch.object(mgr, "_dex_strings", return_value=strings):
+            out = mgr.dropper_indicators("x")
+        assert "likelihood HIGH" in out
+        assert "payload.apk" in out
+        assert "Strong signals" in out
+
+    def test_high_with_install_permission(self, tmp_path):
+        mgr = _mgr(tmp_path)
+        apk = MagicMock()
+        apk.get_permissions.return_value = [
+            "android.permission.REQUEST_INSTALL_PACKAGES"]
+        with patch.object(mgr, "_load", return_value=apk), \
+                patch.object(mgr, "_dex_strings", return_value={"x"}):
+            out = mgr.dropper_indicators("x")
+        assert "likelihood HIGH" in out
+        assert "REQUEST_INSTALL_PACKAGES" in out
+
+    def test_low_benign(self, tmp_path):
+        mgr = _mgr(tmp_path)
+        apk = MagicMock()
+        apk.get_permissions.return_value = ["android.permission.INTERNET"]
+        with patch.object(mgr, "_load", return_value=apk), \
+                patch.object(mgr, "_dex_strings",
+                             return_value={"hello", "https://example.com/api"}):
+            out = mgr.dropper_indicators("x")
+        assert "likelihood LOW" in out
+
+
 class TestExportedComponents:
     def test_explicit_and_implicit(self, tmp_path):
         mgr = _mgr(tmp_path)

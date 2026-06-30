@@ -21,7 +21,13 @@ and Code editors
 - 🧬 Frida Dynamic Instrumentation (attach/spawn, script injection, live messages)
 - 🌐 mitmproxy Network Capture (device traffic proxy + flow listing)
 
-31 tools total. See [README_kr.md](README_kr.md) for the full tool tables (Korean).
+32 tools total. The static / JADX / apktool tools accept a `target` that is an
+installed package name **or a path to a local .apk file** (so uploaded droppers
+and downloaded payloads can be analyzed without a device). `apk_dropper_indicators`
+assesses dropper behaviour and surfaces candidate payload-download URLs. Two
+skills ship in `skills/`: **android-analysis** (tool usage) and
+**malware-analysis** (dropper -> payload -> C2 methodology + KVault grounding +
+report template). See [README_kr.md](README_kr.md) for the full tool tables.
 
 > **Frida version note:** the host frida bindings and the device frida-server must
 > match (at least on major version). One server process loads a single frida

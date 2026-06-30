@@ -298,17 +298,19 @@ def get_package_action_intents(package_name: str) -> list[str]:
 
 
 @mcp.tool()
-def jadx_decompile(package_name: str, include_splits: bool = False) -> str:
-    """Pull a package's APK from the device and decompile it to Java with JADX.
+def jadx_decompile(target: str, include_splits: bool = False) -> str:
+    """Decompile an APK to Java with JADX.
 
-    Run this once per package before using jadx_search_code or jadx_read_source.
+    Run this once per target before using jadx_search_code / jadx_read_source;
+    those take the 'key' reported here (it equals the package name for installed
+    apps, or the file stem for an .apk file).
     Args:
-        package_name (str): The package to decompile (e.g. 'com.example.app')
-        include_splits (bool): Also pull split APKs (default: base.apk only)
+        target (str): An installed package name OR a path to a local .apk file
+        include_splits (bool): Also include split APKs (default: base.apk only)
     Returns:
-        str: A summary including the output directory and decompiled file count
+        str: A summary including the workspace key and decompiled file count
     """
-    return jadxManager.decompile(package_name, include_splits=include_splits)
+    return jadxManager.decompile(target, include_splits=include_splits)
 
 
 @mcp.tool()
@@ -487,50 +489,67 @@ def get_logcat(lines: int = 200, filter_spec: str = "", priority: str = "") -> s
 
 
 @mcp.tool()
-def analyze_manifest(package_name: str) -> str:
-    """Static analysis of a package's manifest: permissions, exported components,
+def analyze_manifest(target: str) -> str:
+    """Static analysis of an APK's manifest: permissions, exported components,
     debuggable/allowBackup/cleartext flags, and SDK levels (via androguard).
     Args:
-        package_name (str): The package to analyze
+        target (str): An installed package name OR a path to a local .apk file
     Returns:
         str: A formatted manifest/permission/attack-surface summary
     """
-    return staticManager.analyze_manifest(package_name)
+    return staticManager.analyze_manifest(target)
 
 
 @mcp.tool()
-def apk_info(package_name: str) -> str:
+def apk_info(target: str) -> str:
     """APK signing and metadata: signing certificates, SHA-256, version, sign state.
     Args:
-        package_name (str): The package to inspect
+        target (str): An installed package name OR a path to a local .apk file
     Returns:
         str: Signing certificate details and APK hashes
     """
-    return staticManager.apk_info(package_name)
+    return staticManager.apk_info(target)
 
 
 @mcp.tool()
-def scan_secrets(package_name: str) -> str:
-    """Scan a package's dex strings for hardcoded secrets and endpoints
+def scan_secrets(target: str) -> str:
+    """Scan an APK's dex strings for hardcoded secrets and endpoints
     (API keys, tokens, private keys, URLs, IPs).
     Args:
-        package_name (str): The package to scan
+        target (str): An installed package name OR a path to a local .apk file
     Returns:
         str: Categorized matches found in the app's code strings
     """
-    return staticManager.scan_secrets(package_name)
+    return staticManager.scan_secrets(target)
 
 
 @mcp.tool()
-def apktool_decode(package_name: str) -> str:
-    """Decode a package's APK with apktool (resources + decoded manifest + smali).
-    Run once per package before apktool_list_files / apktool_read_file.
+def apk_dropper_indicators(target: str) -> str:
+    """Assess whether an APK is a dropper and surface payload-download URLs.
+
+    Flags dynamic code loading, reflection, package-install, crypto and
+    anti-analysis indicators, risky permissions, and URLs that look like
+    second-stage payloads — the starting point for dropper -> payload -> C2
+    analysis.
     Args:
-        package_name (str): The package to decode
+        target (str): An installed package name OR a path to a local .apk file
     Returns:
-        str: A summary including the output directory
+        str: Dropper likelihood, indicators, risky permissions, candidate URLs
     """
-    return apktoolManager.decode(package_name)
+    return staticManager.dropper_indicators(target)
+
+
+@mcp.tool()
+def apktool_decode(target: str) -> str:
+    """Decode an APK with apktool (resources + decoded manifest + smali).
+    Run once per target before apktool_list_files / apktool_read_file (which take
+    the 'key' reported here).
+    Args:
+        target (str): An installed package name OR a path to a local .apk file
+    Returns:
+        str: A summary including the workspace key and output directory
+    """
+    return apktoolManager.decode(target)
 
 
 @mcp.tool()

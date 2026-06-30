@@ -9,6 +9,8 @@ import hashlib
 import re
 from pathlib import Path
 
+from apkutils import resolve_apk
+
 # androguard logs verbosely via loguru; silence it so it does not flood the
 # server console / tool output.
 try:
@@ -32,6 +34,32 @@ _SECRET_PATTERNS = [
     ("IPv4 address", re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"), 60),
 ]
 
+_URL_RE = re.compile(r"https?://[^\s\"'<>\\)]+")
+# URL pointing at a downloadable second-stage payload.
+_PAYLOAD_URL_RE = re.compile(r"https?://[^\s\"'<>\\)]+\.(?:apk|dex|jar|so)\b", re.I)
+
+# Substrings (matched case-insensitively against dex strings) that signal
+# dropper / dynamic-payload behaviour.
+_DROPPER_INDICATORS = {
+    "dynamic_code_loading": [
+        "dexclassloader", "pathclassloader", "inmemorydexclassloader",
+        "basedexclassloader", "loadclass", "defineclass", "opendexfile"],
+    "reflection": [
+        "getdeclaredmethod", "getdeclaredfield", "setaccessible",
+        "java/lang/reflect", "java.lang.reflect"],
+    "native_exec": [
+        "java/lang/runtime", "getruntime", "processbuilder", "/system/bin/sh"],
+    "install_apk": [
+        "vnd.android.package-archive", "packageinstaller",
+        "action_install_package", "installpackage"],
+    "crypto_decrypt": [
+        "javax/crypto", "javax.crypto", "secretkeyspec", "ivparameterspec",
+        "cipher", "dofinal"],
+    "anti_analysis": [
+        "isdebuggerconnected", "ro.debuggable", "test-keys", "qemu",
+        "goldfish", "genymotion"],
+}
+
 
 class StaticAnalysisManager:
     def __init__(self, device_manager, output_dir: str | None = None) -> None:
@@ -39,16 +67,15 @@ class StaticAnalysisManager:
         self.output_dir = Path(output_dir) if output_dir else DEFAULT_WORKSPACE
 
     # ----- apk loading --------------------------------------------------------
-    def _apk_path(self, package_name: str) -> Path:
-        apk_dir = self.output_dir / package_name / "apk"
-        apks = self.device_manager.pull_apk(
-            package_name, apk_dir, include_splits=False)
-        return apks[0]
+    # A "target" is an installed package name OR a path to a local .apk file.
+    def _apk_path(self, target: str) -> Path:
+        path, _ = resolve_apk(self.device_manager, target, self.output_dir)
+        return path
 
-    def _load(self, package_name: str):
+    def _load(self, target: str):
         # Imported lazily so the server still starts if androguard is missing.
         from androguard.core.apk import APK
-        return APK(str(self._apk_path(package_name)))
+        return APK(str(self._apk_path(target)))
 
     # ----- manifest -----------------------------------------------------------
     def _exported_components(self, apk, kind: str, names: list[str]) -> list[str]:
@@ -62,8 +89,8 @@ class StaticAnalysisManager:
                 out.append(f"{name}  [implicit via intent-filter]")
         return out
 
-    def analyze_manifest(self, package_name: str) -> str:
-        apk = self._load(package_name)
+    def analyze_manifest(self, target: str) -> str:
+        apk = self._load(target)
 
         debuggable = apk.get_attribute_value("application", "debuggable")
         allow_backup = apk.get_attribute_value("application", "allowBackup")
@@ -105,9 +132,9 @@ class StaticAnalysisManager:
         return "\n".join(lines)
 
     # ----- signing & metadata -------------------------------------------------
-    def apk_info(self, package_name: str) -> str:
-        path = self._apk_path(package_name)
-        apk = self._load(package_name)
+    def apk_info(self, target: str) -> str:
+        path = self._apk_path(target)
+        apk = self._load(target)
 
         sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
         lines = [
@@ -152,8 +179,8 @@ class StaticAnalysisManager:
                 continue
         return strings
 
-    def scan_secrets(self, package_name: str) -> str:
-        apk = self._load(package_name)
+    def scan_secrets(self, target: str) -> str:
+        apk = self._load(target)
         strings = self._dex_strings(apk)
 
         results: dict[str, set[str]] = {label: set() for label, _, _ in _SECRET_PATTERNS}
@@ -162,7 +189,7 @@ class StaticAnalysisManager:
                 for m in rx.findall(s):
                     results[label].add(m)
 
-        out = [f"Scanned {len(strings)} dex strings in '{package_name}'", ""]
+        out = [f"Scanned {len(strings)} dex strings in '{target}'", ""]
         any_found = False
         for label, _, cap in _SECRET_PATTERNS:
             hits = sorted(results[label])
@@ -177,4 +204,89 @@ class StaticAnalysisManager:
             out.append("")
         if not any_found:
             out.append("No matches for the configured secret/endpoint patterns.")
+        return "\n".join(out).rstrip()
+
+    # ----- dropper / dynamic-loading indicators ------------------------------
+    def dropper_indicators(self, target: str) -> str:
+        """Flag dropper / dynamic-payload behaviour and candidate payload URLs.
+
+        Droppers fetch a second-stage APK/DEX and load it at runtime, then that
+        payload talks to the C2. This surfaces the static signals (dynamic code
+        loading, reflection, package install, crypto, anti-analysis), risky
+        permissions, and URLs that look like payload downloads, so the analyst
+        can pivot to dynamic capture and recurse into the payload.
+        """
+        apk = self._load(target)
+        strings = self._dex_strings(apk)
+        low = [s.lower() for s in strings]
+
+        hits: dict[str, list[str]] = {}
+        for cat, needles in _DROPPER_INDICATORS.items():
+            found = sorted({n for n in needles if any(n in s for s in low)})
+            if found:
+                hits[cat] = found
+
+        perms = set(apk.get_permissions())
+        risky = sorted(p for p in perms if any(k in p for k in (
+            "REQUEST_INSTALL_PACKAGES", "QUERY_ALL_PACKAGES", "SYSTEM_ALERT_WINDOW",
+            "BIND_ACCESSIBILITY", "RECEIVE_BOOT_COMPLETED", "WRITE_EXTERNAL_STORAGE",
+            "READ_SMS", "RECEIVE_SMS", "SEND_SMS")))
+
+        payload_urls, all_urls = set(), set()
+        for s in strings:
+            for m in _PAYLOAD_URL_RE.findall(s):
+                payload_urls.add(m if isinstance(m, str) else m[0])
+            for u in _URL_RE.findall(s):
+                all_urls.add(u)
+        payload_urls = sorted(payload_urls)
+        # URLs that aren't already flagged as payloads (candidate C2 / config).
+        other_urls = sorted(set(all_urls) - set(payload_urls))[:40]
+
+        # Weight the verdict on STRONG signals; generic indicators (reflection,
+        # crypto, dynamic loading) also appear in many benign apps, so they are
+        # shown as context but don't by themselves mean "dropper".
+        has_install_perm = any("REQUEST_INSTALL_PACKAGES" in p for p in perms)
+        strong = []
+        if payload_urls:
+            strong.append("candidate payload-download URL(s) (.apk/.dex/.jar/.so)")
+        if has_install_perm:
+            strong.append("REQUEST_INSTALL_PACKAGES permission")
+        if "dynamic_code_loading" in hits and "install_apk" in hits:
+            strong.append("dynamic code loading + package install APIs together")
+
+        if payload_urls or has_install_perm:
+            verdict = "HIGH"
+        elif strong or "dynamic_code_loading" in hits:
+            verdict = "MEDIUM"
+        else:
+            verdict = "LOW"
+
+        out = [f"Dropper assessment for '{target}': likelihood {verdict}", ""]
+        if strong:
+            out.append("Strong signals (drive the verdict):")
+            out += [f"  * {s}" for s in strong]
+            out.append("")
+        if hits:
+            out.append("Indicators (context; reflection/crypto/dynamic-loading are "
+                       "also common in benign apps):")
+            for cat, found in hits.items():
+                out.append(f"  {cat}: {', '.join(found)}")
+            out.append("")
+        if risky:
+            out.append("Risky permissions:")
+            out += [f"  ! {p}" for p in risky]
+            out.append("")
+        if payload_urls:
+            out.append("Candidate payload-download URLs (.apk/.dex/.jar/.so):")
+            out += [f"  -> {u}" for u in payload_urls]
+            out.append("")
+        if other_urls:
+            out.append(f"Other URLs (candidate C2 / config, {len(other_urls)} shown):")
+            out += [f"  {u}" for u in other_urls]
+            out.append("")
+        out.append(
+            "Next: pivot to dynamic capture (install on the analysis device, "
+            "network_start_capture, run the app) to catch the actual payload "
+            "download + C2, then re-run these tools on the payload APK to find "
+            "its C2 (recurse).")
         return "\n".join(out).rstrip()
