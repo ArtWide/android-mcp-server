@@ -78,4 +78,4 @@ apktool:
 # 1. No config file: Auto-select when only one device connected
 # 2. Config file with name: null or name: "": Auto-select when only one device connected
 # 3. Config file with device.name: "specific-device": Connect to specific device
-# 4. Multiple devices connected without device.name: Will show error and list available devices
+# 4. Multiple devices connected without device.name: Auto-selects the first device (set device.name to choose)

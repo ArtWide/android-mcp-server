@@ -167,10 +167,10 @@ Use the first column value (e.g., `13b22d7f` or `emulator-5554`) as the device n
 |----------|----------------------|----------|
 | Single device connected | None | ✅ Auto-connects to the device |
 | Multiple devices, want specific one | `config.yaml` with `device.name` | ✅ Connects to specified device |
-| Multiple devices, no config | None | ❌ Shows error with available devices |
+| Multiple devices, no config | None | ✅ Auto-selects the first device (logs the choice) |
 | No devices connected | N/A | ❌ Shows "no devices" error |
 
-**Note**: If you have multiple devices connected and don't specify which one to use, the server will show an error message listing all available devices.
+**Note**: If you have multiple devices connected and don't specify which one to use, the server auto-selects the first connected device and logs that choice (with the full device list). Set `device.name` in `config.yaml` to pick a specific device.
 
 ## Usage
 

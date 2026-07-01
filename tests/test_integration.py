@@ -146,23 +146,21 @@ device:
 
     @patch('adbdevicemanager.AdbDeviceManager.check_adb_installed')
     @patch('adbdevicemanager.AdbDeviceManager.get_available_devices')
-    def test_multiple_devices_no_config_error(self, mock_get_devices, mock_check_adb):
-        """Test server initialization fails with multiple devices and no config"""
-        # Setup mocks
+    @patch('adbdevicemanager.AdbClient')
+    def test_multiple_devices_no_config_auto_selects_first(self, mock_adb_client, mock_get_devices, mock_check_adb):
+        """Multiple devices + no config -> auto-select the first device."""
         mock_check_adb.return_value = True
         mock_get_devices.return_value = ["device123", "device456"]
+        mock_device = MagicMock()
+        mock_adb_client.return_value.device.return_value = mock_device
 
-        # Use non-existent config file
         non_existent_config = os.path.join(self.temp_dir, "non_existent.yaml")
 
-        try:
-            device_manager, messages = self._simulate_server_initialization(
-                non_existent_config)
-            assert False, "Should have raised an exception"
-        except RuntimeError as e:
-            assert "Multiple devices connected" in str(e)
-            assert "device123" in str(e)
-            assert "device456" in str(e)
+        device_manager, messages = self._simulate_server_initialization(
+            non_existent_config)
+
+        assert device_manager.device == mock_device
+        mock_adb_client.return_value.device.assert_called_once_with("device123")
 
     @patch('adbdevicemanager.AdbDeviceManager.check_adb_installed')
     @patch('adbdevicemanager.AdbDeviceManager.get_available_devices')

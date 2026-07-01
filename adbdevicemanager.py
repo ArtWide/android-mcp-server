@@ -100,12 +100,14 @@ class AdbDeviceManager:
                 print(
                     f"No device specified, automatically selected: {selected_device_name}")
             elif len(available_devices) > 1:
-                error_msg = f"Multiple devices connected: {available_devices}. Please specify a device in config.yaml or connect only one device."
-                if exit_on_error:
-                    print(error_msg, file=sys.stderr)
-                    sys.exit(1)
-                else:
-                    raise RuntimeError(error_msg)
+                # Multiple devices and no device specified: auto-select the
+                # first one (rather than failing) and say so. Set device.name in
+                # config.yaml to pick a specific device.
+                selected_device_name = available_devices[0]
+                print(
+                    f"Multiple devices connected: {available_devices}. "
+                    f"Auto-selecting the first ({selected_device_name}). "
+                    f"To choose a specific device, set device.name in config.yaml.")
             # If len(available_devices) == 0, it's already caught by the earlier check
 
         # At this point, selected_device_name should always be set due to the logic above

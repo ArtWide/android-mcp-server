@@ -43,19 +43,18 @@ class TestAdbDeviceManager:
 
     @patch('adbdevicemanager.AdbDeviceManager.check_adb_installed')
     @patch('adbdevicemanager.AdbDeviceManager.get_available_devices')
-    def test_multiple_devices_no_selection_error(self, mock_get_devices, mock_check_adb):
-        """Test error when multiple devices are connected but none specified"""
-        # Setup mocks
+    @patch('adbdevicemanager.AdbClient')
+    def test_multiple_devices_auto_selects_first(self, mock_adb_client, mock_get_devices, mock_check_adb):
+        """Multiple devices + no selection -> auto-select the first one."""
         mock_check_adb.return_value = True
         mock_get_devices.return_value = ["device123", "device456"]
+        mock_device = MagicMock()
+        mock_adb_client.return_value.device.return_value = mock_device
 
-        # Test with device_name=None and multiple devices
-        with pytest.raises(RuntimeError) as exc_info:
-            AdbDeviceManager(device_name=None, exit_on_error=False)
+        manager = AdbDeviceManager(device_name=None, exit_on_error=False)
 
-        assert "Multiple devices connected" in str(exc_info.value)
-        assert "device123" in str(exc_info.value)
-        assert "device456" in str(exc_info.value)
+        mock_adb_client.return_value.device.assert_called_once_with("device123")
+        assert manager.device == mock_device
 
     @patch('adbdevicemanager.AdbDeviceManager.check_adb_installed')
     @patch('adbdevicemanager.AdbDeviceManager.get_available_devices')
