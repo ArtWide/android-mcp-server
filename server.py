@@ -9,6 +9,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from adbdevicemanager import AdbDeviceManager
 from apktoolmanager import ApktoolManager
 from fridamanager import FridaManager
+from imagerender import CodeImageRenderer
 from jadxmanager import JadxManager
 from networkmanager import NetworkCaptureManager
 from staticmanager import StaticAnalysisManager
@@ -232,6 +233,7 @@ apktoolManager = ApktoolManager(
     output_dir=_workspace,
 )
 networkManager = NetworkCaptureManager(deviceManager, output_dir=_workspace)
+codeRenderer = CodeImageRenderer(output_dir=_workspace)
 
 
 @mcp.tool()
@@ -578,6 +580,42 @@ def apktool_read_file(package_name: str, relative_path: str) -> str:
 
 
 @mcp.tool()
+def render_code_image(
+    code: str,
+    language: str = "java",
+    highlight_lines: list[int] | None = None,
+    annotations: list[dict] | None = None,
+    title: str = "",
+    start_line: int = 1,
+) -> Image:
+    """Render a code snippet to an annotated PNG for the analysis report.
+
+    Produces a syntax-highlighted, line-numbered image with red boxes around the
+    problematic lines and green Korean inline comments explaining *why* the code
+    is malicious. You decide what to box and what the Korean explanation says;
+    this tool only draws them in the house style.
+
+    Args:
+        code (str): The source snippet (e.g. from jadx_read_source). Keep it
+            focused — a class/method, not a whole file.
+        language (str): pygments lexer name (java, xml, kotlin, text, ...).
+        highlight_lines (list[int]): 1-based line numbers (relative to the
+            snippet) to box in red; consecutive numbers merge into one box.
+        annotations (list[dict]): [{"line": int, "text": "<한국어 설명>"}] drawn
+            as green `// ...` comments at the end of that line.
+        title (str): Optional caption drawn above the code (e.g. class path).
+        start_line (int): Number shown for the first line (when the snippet
+            starts partway through a file).
+    Returns:
+        Image: the rendered PNG
+    """
+    path = codeRenderer.render_code_image(
+        code, language=language, highlight_lines=highlight_lines,
+        annotations=annotations, title=title, start_line=start_line)
+    return Image(path=path)
+
+
+@mcp.tool()
 def network_start_capture(port: int = 8080) -> str:
     """Start capturing the device's network traffic via mitmproxy.
 
@@ -600,6 +638,20 @@ def network_list_flows(limit: int = 50) -> str:
         str: One line per captured request/response
     """
     return networkManager.list_flows(limit=limit)
+
+
+@mcp.tool()
+def network_get_flow(index: int) -> str:
+    """Get one captured flow's full detail: request/response headers and body.
+
+    Use the 1-based index shown in network_list_flows ([n] markers). Bodies are
+    decoded (charset-aware) and size-capped; binary bodies are returned base64.
+    Args:
+        index (int): 1-based flow index from network_list_flows
+    Returns:
+        str: Request line, headers, and decoded body for the request and response
+    """
+    return networkManager.get_flow(index)
 
 
 @mcp.tool()

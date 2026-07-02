@@ -95,23 +95,80 @@ class NetworkCaptureManager:
             "  Use network_list_flows to read traffic, network_stop_capture when done."
         )
 
+    def _read_flows(self) -> list[dict]:
+        """Parse the JSONL flow file into a list of flow dicts (in order)."""
+        if self._flowfile is None or not self._flowfile.exists():
+            return []
+        flows = []
+        for line in self._flowfile.read_text(encoding="utf-8").splitlines():
+            try:
+                flows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return flows
+
     def list_flows(self, limit: int = 50) -> str:
         if self._flowfile is None or not self._flowfile.exists():
             return "No capture file yet. Start a capture with network_start_capture."
-        lines = self._flowfile.read_text(encoding="utf-8").splitlines()
-        if not lines:
+        flows = self._read_flows()
+        if not flows:
             return "(no flows captured yet)"
+        total = len(flows)
+        start = max(0, total - limit)
         out = []
-        for line in lines[-limit:]:
-            try:
-                e = json.loads(line)
-                out.append(
-                    f"{e.get('status','-')}  {e.get('method','?')} {e.get('url','')}"
-                    f"  ({e.get('resp_len',0)}B, {e.get('content_type','')})")
-            except json.JSONDecodeError:
-                continue
-        header = f"Last {len(out)} of {len(lines)} flows:"
+        for idx, e in enumerate(flows[start:], start=start + 1):
+            out.append(
+                f"[{idx}] {e.get('status','-')}  {e.get('method','?')} "
+                f"{e.get('url','')}"
+                f"  ({e.get('resp_len',0)}B, {e.get('content_type','')})")
+        header = (f"Last {len(out)} of {total} flows "
+                  f"(use network_get_flow <index> for headers/body):")
         return header + "\n" + "\n".join(out)
+
+    def get_flow(self, index: int) -> str:
+        """Return the full detail (headers + decoded body) of one flow.
+
+        `index` is 1-based, matching the [n] markers from list_flows.
+        """
+        flows = self._read_flows()
+        if not flows:
+            if self._flowfile is None or not self._flowfile.exists():
+                return "No capture file yet. Start a capture with network_start_capture."
+            return "(no flows captured yet)"
+        if index < 1 or index > len(flows):
+            return f"Flow index {index} out of range (1..{len(flows)})."
+
+        e = flows[index - 1]
+        lines = [
+            f"Flow [{index}] of {len(flows)}",
+            f"{e.get('method','?')} {e.get('url','')} "
+            f"{e.get('http_version','')}".rstrip(),
+        ]
+        lines.append("")
+        lines.append("--- Request headers ---")
+        lines.extend(f"{k}: {v}" for k, v in e.get("req_headers", []))
+        lines.extend(self._format_body("Request body", e.get("req_body")))
+
+        status = e.get("status")
+        if status is not None:
+            lines.append("")
+            lines.append(f"--- Response  {status} {e.get('reason','')}".rstrip())
+            lines.append("--- Response headers ---")
+            lines.extend(f"{k}: {v}" for k, v in e.get("resp_headers", []))
+            lines.extend(self._format_body("Response body", e.get("resp_body")))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_body(label: str, body: dict | None) -> list[str]:
+        if not body or body.get("len", 0) == 0:
+            return ["", f"--- {label} --- (empty)"]
+        note = " [truncated]" if body.get("truncated") else ""
+        out = ["", f"--- {label} ({body.get('len', 0)}B){note} ---"]
+        if body.get("text") is not None:
+            out.append(body["text"])
+        elif body.get("b64") is not None:
+            out.append(f"(binary, base64) {body['b64']}")
+        return out
 
     def stop_capture(self) -> str:
         msg = []

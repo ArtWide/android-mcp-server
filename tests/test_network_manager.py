@@ -81,10 +81,65 @@ class TestFlows:
         out = mgr.list_flows()
         assert "GET https://a.com/x" in out
         assert "401  POST https://a.com/login" in out
+        # flows are numbered so network_get_flow can address them
+        assert "[1]" in out and "[2]" in out
 
     def test_list_flows_no_file(self, tmp_path):
         mgr = _mgr(tmp_path)
         assert "No capture file" in mgr.list_flows()
+
+    def test_get_flow_returns_headers_and_body(self, tmp_path):
+        mgr = _mgr(tmp_path)
+        mgr.workdir.mkdir(parents=True, exist_ok=True)
+        mgr._flowfile = mgr.workdir / "flows-8080.jsonl"
+        with open(mgr._flowfile, "w", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "method": "POST", "url": "https://api.example.com/device",
+                "http_version": "HTTP/1.1", "status": 200, "reason": "OK",
+                "req_headers": [["Host", "api.example.com"],
+                                ["Content-Type", "application/json"]],
+                "req_body": {"text": '{"udid":"abc"}', "b64": None,
+                             "len": 14, "truncated": False},
+                "resp_headers": [["Content-Type", "application/json"]],
+                "resp_body": {"text": '{"ok":true}', "b64": None,
+                              "len": 11, "truncated": False},
+            }) + "\n")
+        out = mgr.get_flow(1)
+        assert "POST https://api.example.com/device HTTP/1.1" in out
+        assert "Host: api.example.com" in out
+        assert '{"udid":"abc"}' in out
+        assert "Response  200 OK" in out
+        assert '{"ok":true}' in out
+
+    def test_get_flow_binary_body_and_truncation(self, tmp_path):
+        mgr = _mgr(tmp_path)
+        mgr.workdir.mkdir(parents=True, exist_ok=True)
+        mgr._flowfile = mgr.workdir / "flows-8080.jsonl"
+        with open(mgr._flowfile, "w", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "method": "GET", "url": "https://a.com/img", "status": 200,
+                "req_headers": [], "req_body": {"text": None, "b64": None,
+                                                "len": 0, "truncated": False},
+                "resp_headers": [], "resp_body": {"text": None, "b64": "QUJD",
+                                                  "len": 99999, "truncated": True},
+            }) + "\n")
+        out = mgr.get_flow(1)
+        assert "Request body --- (empty)" in out
+        assert "[truncated]" in out
+        assert "base64) QUJD" in out
+
+    def test_get_flow_out_of_range(self, tmp_path):
+        mgr = _mgr(tmp_path)
+        mgr.workdir.mkdir(parents=True, exist_ok=True)
+        mgr._flowfile = mgr.workdir / "flows-8080.jsonl"
+        mgr._flowfile.write_text(json.dumps({"method": "GET", "url": "u",
+                                             "status": 200}) + "\n",
+                                 encoding="utf-8")
+        assert "out of range" in mgr.get_flow(5)
+
+    def test_get_flow_no_file(self, tmp_path):
+        mgr = _mgr(tmp_path)
+        assert "No capture file" in mgr.get_flow(1)
 
     def test_status_not_running(self, tmp_path):
         mgr = _mgr(tmp_path)
