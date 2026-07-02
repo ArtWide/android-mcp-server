@@ -4,6 +4,7 @@ Tests for the AdbDeviceManager additions: pull_apk and get_logcat.
 
 import os
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -46,6 +47,50 @@ class TestPullApk:
         with pytest.raises(RuntimeError) as exc:
             mgr.pull_apk("com.absent", tmp_path)
         assert "not found on device" in str(exc.value)
+
+
+class TestFileTransfer:
+    def test_push_file(self, tmp_path):
+        mgr = _manager()
+        f = tmp_path / "sample.apk"
+        f.write_text("apk")
+        out = mgr.push_file(str(f), "/data/local/tmp/sample.apk")
+        mgr.device.push.assert_called_once_with(str(f), "/data/local/tmp/sample.apk")
+        assert "Pushed" in out
+
+    def test_push_missing_local(self, tmp_path):
+        mgr = _manager()
+        with pytest.raises(RuntimeError) as exc:
+            mgr.push_file(str(tmp_path / "nope.apk"), "/data/local/tmp/x")
+        assert "not found" in str(exc.value)
+
+    def test_pull_file(self, tmp_path):
+        mgr = _manager()
+        dest = tmp_path / "out.bin"
+
+        def fake_pull(remote, local):
+            Path(local).write_text("data")
+        mgr.device.pull.side_effect = fake_pull
+        out = mgr.pull_file("/sdcard/x.bin", str(dest))
+        assert dest.exists()
+        assert "Pulled" in out
+
+    def test_install_apk(self, tmp_path):
+        mgr = _manager()
+        f = tmp_path / "m.apk"
+        f.write_text("apk")
+        out = mgr.install_apk(str(f), reinstall=True, grant_permissions=True)
+        mgr.device.install.assert_called_once()
+        _, kwargs = mgr.device.install.call_args
+        assert kwargs["reinstall"] is True
+        assert kwargs["grand_all_permissions"] is True
+        assert "Installed" in out
+
+    def test_install_missing_apk(self, tmp_path):
+        mgr = _manager()
+        with pytest.raises(RuntimeError) as exc:
+            mgr.install_apk(str(tmp_path / "nope.apk"))
+        assert "not found" in str(exc.value)
 
 
 class TestLogcat:

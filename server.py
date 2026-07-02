@@ -491,6 +491,47 @@ def get_logcat(lines: int = 200, filter_spec: str = "", priority: str = "") -> s
 
 
 @mcp.tool()
+def push_file(local_path: str, device_path: str) -> str:
+    """Push a file from the host to the device (e.g. a sample APK, tool, or payload).
+    Args:
+        local_path (str): Path to the file on the host
+        device_path (str): Destination path on the device (e.g. /data/local/tmp/x.apk)
+    Returns:
+        str: Confirmation with the byte count
+    """
+    return deviceManager.push_file(local_path, device_path)
+
+
+@mcp.tool()
+def pull_file(device_path: str, local_path: str = "") -> str:
+    """Pull a file from the device to the host (e.g. a dropped payload to analyze).
+    Args:
+        device_path (str): Path to the file on the device
+        local_path (str): Host destination; defaults to workspace/pulled/<name>
+    Returns:
+        str: Confirmation with the local path and byte count
+    """
+    return deviceManager.pull_file(device_path, local_path)
+
+
+@mcp.tool()
+def install_apk(apk_path: str, reinstall: bool = False,
+                grant_permissions: bool = False, downgrade: bool = False) -> str:
+    """Install a host APK onto the device (adb install).
+    Args:
+        apk_path (str): Path to the .apk file on the host
+        reinstall (bool): Keep data and reinstall (-r)
+        grant_permissions (bool): Grant all runtime permissions (-g)
+        downgrade (bool): Allow version downgrade (-d)
+    Returns:
+        str: Install result
+    """
+    return deviceManager.install_apk(
+        apk_path, reinstall=reinstall,
+        grant_permissions=grant_permissions, downgrade=downgrade)
+
+
+@mcp.tool()
 def analyze_manifest(target: str) -> str:
     """Static analysis of an APK's manifest: permissions, exported components,
     debuggable/allowBackup/cleartext flags, and SDK levels (via androguard).

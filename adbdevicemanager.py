@@ -227,6 +227,44 @@ class AdbDeviceManager:
             cmd += f" {filter_spec}"
         return self.device.shell(cmd)
 
+    def push_file(self, local_path: str, device_path: str) -> str:
+        """Push a host file to the device (e.g. a sample APK, tool, or payload)."""
+        p = Path(local_path)
+        if not p.is_file():
+            raise RuntimeError(f"Local file not found: {local_path}")
+        self.device.push(str(p), device_path)
+        return f"Pushed {p} -> {device_path} ({p.stat().st_size} bytes)"
+
+    def pull_file(self, device_path: str, local_path: str = "") -> str:
+        """Pull a file from the device to the host (e.g. a dropped payload).
+
+        Defaults to workspace/pulled/<name> when local_path is omitted.
+        """
+        if local_path:
+            dest = Path(local_path)
+        else:
+            dest = _HERE / "workspace" / "pulled" / Path(device_path).name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        self.device.pull(device_path, str(dest))
+        if not dest.exists():
+            raise RuntimeError(f"Pull produced no file for {device_path}")
+        return f"Pulled {device_path} -> {dest} ({dest.stat().st_size} bytes)"
+
+    def install_apk(self, apk_path: str, reinstall: bool = False,
+                    grant_permissions: bool = False, downgrade: bool = False) -> str:
+        """Install a host APK onto the device (adb install)."""
+        p = Path(apk_path)
+        if not p.is_file():
+            raise RuntimeError(f"APK not found: {apk_path}")
+        try:
+            self.device.install(
+                str(p), reinstall=reinstall, downgrade=downgrade,
+                grand_all_permissions=grant_permissions)
+        except Exception as e:
+            raise RuntimeError(f"Install failed for {p.name}: {e}")
+        return (f"Installed {p.name} "
+                f"(reinstall={reinstall}, grant={grant_permissions}, downgrade={downgrade})")
+
     def take_screenshot(self) -> str:
         self.device.shell("screencap -p /sdcard/screenshot.png")
         self.device.pull("/sdcard/screenshot.png", SCREENSHOT_PATH)
