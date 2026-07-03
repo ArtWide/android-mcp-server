@@ -157,6 +157,24 @@ class CodeImageRenderer:
 
         lines = _tokenize_lines(code, language)
 
+        # Drop highlights / annotations that point at a blank or out-of-range
+        # line — those would draw an EMPTY box (or a floating comment) with no
+        # code inside, the artifact seen in report figures. Keep only targets
+        # (gutter-numbered) that have visible content.
+        content_lines = {
+            start_line + i for i, segs in enumerate(lines)
+            if any(t.strip() for _, t in segs)
+        }
+        skipped_hl = sorted(set(highlight_lines) - content_lines)
+        skipped_ann = sorted(k for k in ann_by_line if k not in content_lines)
+        highlight_lines = [ln for ln in highlight_lines if ln in content_lines]
+        ann_by_line = {k: v for k, v in ann_by_line.items() if k in content_lines}
+        if skipped_hl or skipped_ann:
+            import sys
+            print(f"[render_code_image] skipped empty/out-of-range targets: "
+                  f"highlights={skipped_hl} annotations={skipped_ann}",
+                  file=sys.stderr)
+
         # Metrics. Baseline-align mixed fonts on a shared baseline per line.
         ascent = max(code_font.getmetrics()[0], kr_font.getmetrics()[0])
         descent = max(code_font.getmetrics()[1], kr_font.getmetrics()[1])

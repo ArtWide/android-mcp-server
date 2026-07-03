@@ -70,6 +70,16 @@ class TestRender:
                                    language="not-a-real-lexer")
         assert os.path.isfile(path)
 
+    def test_blank_line_highlight_and_annotation_skipped(self, tmp_path):
+        r = CodeImageRenderer(output_dir=str(tmp_path))
+        # line 2 is blank -> highlighting/annotating it must not draw an empty
+        # box; the render still succeeds.
+        code = "int a = 1;\n\nint b = 2;\n"
+        path = r.render_code_image(
+            code, language="java", highlight_lines=[2],
+            annotations=[{"line": 2, "text": "빈 줄"}, {"line": 1, "text": "ok"}])
+        assert os.path.isfile(path)
+
     def test_start_line_offset(self, tmp_path):
         r = CodeImageRenderer(output_dir=str(tmp_path))
         # rendering a snippet that starts at line 100 should still work and
