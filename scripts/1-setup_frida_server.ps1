@@ -130,6 +130,45 @@ if ($needPush) {
     Write-Ok "frida-server $hostVer pushed to $ServerPath (arch $arch)"
 }
 
+# --- repackaging deps (frida-gadget + uber-apk-signer) -----------------------
+# Enable non-root instrumentation via repackage_apk_frida: a frida-gadget .so
+# matching the host frida + a signer are staged in ~/.android-mcp-tools where
+# the MCP RepackageManager looks for them.
+$ToolsDir = Join-Path $env:USERPROFILE ".android-mcp-tools"
+New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+
+$gadgetSo = Join-Path $ToolsDir "frida-gadget-$hostVer-android-$arch.so"
+if ((Test-Path $gadgetSo) -and -not $Force) {
+    Write-Ok "frida-gadget already present: $gadgetSo"
+} else {
+    Write-Step "Downloading frida-gadget ($hostVer, $arch) for non-root repackaging"
+    $gxz = Join-Path $dlDir "frida-gadget-$hostVer-android-$arch.so.xz"
+    $gurl = "https://github.com/frida/frida/releases/download/$hostVer/frida-gadget-$hostVer-android-$arch.so.xz"
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $gurl -OutFile $gxz
+        & $VenvPython -c "import lzma,shutil,sys; f=lzma.open(sys.argv[1]); o=open(sys.argv[2],'wb'); shutil.copyfileobj(f,o); o.close(); f.close()" $gxz $gadgetSo
+        Write-Ok "frida-gadget staged: $gadgetSo"
+    } catch { Write-Warn "frida-gadget download failed: $($_.Exception.Message)" }
+}
+
+$signer = Get-ChildItem $ToolsDir -Filter "uber-apk-signer*.jar" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($signer) {
+    Write-Ok "uber-apk-signer already present: $($signer.Name)"
+} else {
+    Write-Step "Downloading uber-apk-signer (APK re-signing)"
+    try {
+        $rel = Invoke-RestMethod -UseBasicParsing `
+            -Uri "https://api.github.com/repos/patrickfav/uber-apk-signer/releases/latest" `
+            -Headers @{ "User-Agent" = "android-mcp-installer" }
+        $asset = $rel.assets | Where-Object { $_.name -match '^uber-apk-signer.*\.jar$' } | Select-Object -First 1
+        if ($asset) {
+            Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url `
+                -OutFile (Join-Path $ToolsDir $asset.name)
+            Write-Ok "uber-apk-signer staged: $($asset.name)"
+        } else { Write-Warn "No uber-apk-signer jar asset found." }
+    } catch { Write-Warn "uber-apk-signer download failed: $($_.Exception.Message)" }
+}
+
 # --- start (optional) --------------------------------------------------------
 if ($Start) {
     Write-Step "Starting frida-server"

@@ -12,6 +12,7 @@ from fridamanager import FridaManager
 from imagerender import CodeImageRenderer
 from jadxmanager import JadxManager
 from networkmanager import NetworkCaptureManager
+from repackagemanager import RepackageManager
 from staticmanager import StaticAnalysisManager
 
 CONFIG_FILE = "config.yaml"
@@ -233,6 +234,9 @@ apktoolManager = ApktoolManager(
     output_dir=_workspace,
 )
 networkManager = NetworkCaptureManager(deviceManager, output_dir=_workspace)
+repackageManager = RepackageManager(
+    deviceManager, output_dir=_workspace,
+    apktool_path=os.environ.get("APKTOOL_PATH") or _apktool_config.get("path") or None)
 codeRenderer = CodeImageRenderer(output_dir=_workspace)
 
 
@@ -650,6 +654,32 @@ def apktool_read_file(package_name: str, relative_path: str) -> str:
         str: The file contents
     """
     return apktoolManager.read_file(package_name, relative_path)
+
+
+@mcp.tool()
+def repackage_apk_frida(target: str, arch: str = "arm64-v8a",
+                        trust_user_certs: bool = True, gadget_config: str = "",
+                        output_path: str = "") -> str:
+    """Repackage an APK with frida-gadget for NON-ROOT dynamic analysis (host-side).
+
+    Injects frida-gadget, optionally sets networkSecurityConfig to trust user CAs
+    (for mitmproxy HTTPS), rebuilds with apktool and re-signs. Feed the returned
+    APK to install_apk, launch it, then attach Frida / capture traffic — no root
+    needed. Needs a frida-gadget matching the host frida and a signer
+    (uber-apk-signer.jar); scripts/1-setup_frida_server.ps1 -SetupFridaServer
+    stages both.
+    Args:
+        target (str): Installed package name OR a path to a local .apk file
+        arch (str): Device ABI (arm64-v8a / armeabi-v7a / x86_64 / x86)
+        trust_user_certs (bool): Add user-CA trust for HTTPS interception
+        gadget_config (str): libgadget.config.so JSON (e.g. script auto-load); empty=default
+        output_path (str): Output APK path; default <name>-repackaged.apk
+    Returns:
+        str: Summary including the signed APK path
+    """
+    return repackageManager.repackage_frida(
+        target, arch=arch, trust_user_certs=trust_user_certs,
+        gadget_config=gadget_config, output_path=output_path)
 
 
 @mcp.tool()
