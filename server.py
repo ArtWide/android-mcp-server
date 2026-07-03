@@ -472,6 +472,21 @@ def frida_run_script(session_id: str, script_source: str) -> str:
 
 
 @mcp.tool()
+def frida_run_preset(session_id: str, preset: str = "ssl-unpin") -> str:
+    """Load a bundled Frida preset script into a session (works with gadget too).
+
+    'ssl-unpin' bypasses SSL pinning/trust (Conscrypt/TrustManager, OkHttp,
+    HostnameVerifier, WebView) so mitmproxy can decrypt the app's HTTPS.
+    Args:
+        session_id (str): A session from frida_attach/frida_spawn
+        preset (str): Preset name (e.g. 'ssl-unpin')
+    Returns:
+        str: Load status; read hook output with frida_read_messages
+    """
+    return fridaManager.run_preset(session_id, preset)
+
+
+@mcp.tool()
 def frida_read_messages(session_id: str) -> str:
     """Drain buffered messages emitted by a session's script (send()/errors).
     Args:
@@ -568,6 +583,37 @@ def install_apk(apk_path: str, reinstall: bool = False,
 
 
 @mcp.tool()
+def install_and_launch(apk_path: str, package: str = "", launch: bool = True,
+                       uninstall_existing: bool = True) -> str:
+    """Install a (re-signed) APK and optionally launch it, removing a conflicting
+    install first (a re-signed APK's signature differs, so the old one must go).
+    Args:
+        apk_path (str): Host path to the .apk (e.g. repackage_apk_frida output)
+        package (str): Package name (needed to uninstall/launch)
+        launch (bool): Launch the app after install
+        uninstall_existing (bool): Remove an existing install of `package` first
+    Returns:
+        str: Steps taken (+ undo), or the raw install error
+    """
+    return deviceManager.install_and_launch(
+        apk_path, package=package, launch=launch, uninstall_existing=uninstall_existing)
+
+
+@mcp.tool()
+def install_user_ca(cert_source: str = "") -> str:
+    """Push a CA certificate to the device and open the install screen for the
+    analyst to finish (non-root user-CA install; final confirmation is manual).
+    Args:
+        cert_source (str): Local .cer/.pem path or http(s) URL; empty = host
+                           ~/.mitmproxy/mitmproxy-ca-cert.cer
+    Returns:
+        str: What was pushed + on-device steps + undo. Pair with
+             repackage_apk_frida(trust_user_certs=True) for targetSdk>=24 apps.
+    """
+    return deviceManager.install_user_ca(cert_source)
+
+
+@mcp.tool()
 def analyze_manifest(target: str) -> str:
     """Static analysis of an APK's manifest: permissions, exported components,
     debuggable/allowBackup/cleartext flags, and SDK levels (via androguard).
@@ -657,29 +703,42 @@ def apktool_read_file(package_name: str, relative_path: str) -> str:
 
 
 @mcp.tool()
-def repackage_apk_frida(target: str, arch: str = "arm64-v8a",
-                        trust_user_certs: bool = True, gadget_config: str = "",
-                        output_path: str = "") -> str:
+def repackage_apk_frida(target: str, arch: str = "", trust_user_certs: bool = True,
+                        gadget_config: str = "", output_path: str = "",
+                        keep_workdir: bool = False) -> str:
     """Repackage an APK with frida-gadget for NON-ROOT dynamic analysis (host-side).
 
-    Injects frida-gadget, optionally sets networkSecurityConfig to trust user CAs
-    (for mitmproxy HTTPS), rebuilds with apktool and re-signs. Feed the returned
-    APK to install_apk, launch it, then attach Frida / capture traffic — no root
-    needed. Needs a frida-gadget matching the host frida and a signer
-    (uber-apk-signer.jar); scripts/1-setup_frida_server.ps1 -SetupFridaServer
-    stages both.
+    apktool decode -> inject frida-gadget into the Application <clinit> (multidex
+    aware) -> merge user-CA trust into networkSecurityConfig (for mitmproxy HTTPS)
+    -> rebuild -> v1+v2+v3 re-sign. Feed the returned APK to install_and_launch,
+    then attach Frida + frida_run_preset('ssl-unpin'). Requires a frida-gadget
+    matching the host frida and a signer — check_repackage_toolchain reports
+    readiness; scripts/1-setup_frida_server.ps1 -SetupFridaServer stages them.
+    On failure the full apktool/sign log is returned (workdir kept).
     Args:
         target (str): Installed package name OR a path to a local .apk file
-        arch (str): Device ABI (arm64-v8a / armeabi-v7a / x86_64 / x86)
-        trust_user_certs (bool): Add user-CA trust for HTTPS interception
+        arch (str): Device ABI; empty = auto-detect from the active device
+        trust_user_certs (bool): Merge user-CA trust for HTTPS interception
         gadget_config (str): libgadget.config.so JSON (e.g. script auto-load); empty=default
         output_path (str): Output APK path; default <name>-repackaged.apk
+        keep_workdir (bool): Keep the temp build dir for debugging
     Returns:
-        str: Summary including the signed APK path
+        str: Result incl. signed APK path + signing cert SHA-256, or an error log
     """
     return repackageManager.repackage_frida(
         target, arch=arch, trust_user_certs=trust_user_certs,
-        gadget_config=gadget_config, output_path=output_path)
+        gadget_config=gadget_config, output_path=output_path, keep_workdir=keep_workdir)
+
+
+@mcp.tool()
+def check_repackage_toolchain() -> str:
+    """Report host readiness for repackage_apk_frida: apktool, Java, host frida,
+    the frida-gadget matching the active device's ABI, and a signer — naming any
+    missing piece and how to install it.
+    Returns:
+        str: A per-component status report
+    """
+    return repackageManager.check_toolchain()
 
 
 @mcp.tool()

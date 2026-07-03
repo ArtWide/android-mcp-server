@@ -84,29 +84,40 @@ class TestInjectLoadLibrary:
 
 
 class TestNSC:
-    def test_adds_when_absent(self, tmp_path):
+    def test_creates_when_absent(self, tmp_path):
+        mgr = _mgr(tmp_path)
         d = tmp_path / "dec"; _manifest(d, "com.x", ".App")
-        RepackageManager._apply_nsc(d)
+        mgr._apply_nsc(d)
         assert (d / "res" / "xml" / "nsc_mitm.xml").exists()
         man = (d / "AndroidManifest.xml").read_text()
         assert 'networkSecurityConfig="@xml/nsc_mitm"' in man
 
-    def test_replaces_existing(self, tmp_path):
+    def test_merges_into_existing_preserving_cleartext(self, tmp_path):
+        mgr = _mgr(tmp_path)
         d = tmp_path / "dec"; d.mkdir()
         (d / "AndroidManifest.xml").write_text(
             '<manifest package="com.x"><application '
-            'android:networkSecurityConfig="@xml/old" ></application></manifest>',
+            'android:networkSecurityConfig="@xml/net" ></application></manifest>',
             encoding="utf-8")
-        RepackageManager._apply_nsc(d)
-        man = (d / "AndroidManifest.xml").read_text()
-        assert "@xml/nsc_mitm" in man and "@xml/old" not in man
+        xmldir = d / "res" / "xml"; xmldir.mkdir(parents=True)
+        (xmldir / "net.xml").write_text(
+            '<?xml version="1.0"?><network-security-config>'
+            '<base-config cleartextTrafficPermitted="false">'
+            '<trust-anchors><certificates src="system"/></trust-anchors>'
+            '</base-config></network-security-config>', encoding="utf-8")
+        note = mgr._apply_nsc(d)
+        merged = (xmldir / "net.xml").read_text()
+        assert 'src="user"' in merged
+        assert 'cleartextTrafficPermitted="false"' in merged  # preserved
+        assert "merged" in note
+        assert "@xml/net" in (d / "AndroidManifest.xml").read_text()
 
 
 class TestGadgetDiscovery:
     def test_bad_arch(self, tmp_path):
         mgr = _mgr(tmp_path)
         with pytest.raises(RuntimeError) as exc:
-            mgr._find_gadget("mips")
+            mgr._gadget_for("mips")
         assert "Unsupported abi" in str(exc.value)
 
     def test_missing_gadget(self, tmp_path):
@@ -115,7 +126,7 @@ class TestGadgetDiscovery:
                 patch("repackagemanager._host_frida_version", return_value="17.15.3"), \
                 patch.dict(os.environ, {"FRIDA_GADGET_SO": ""}):
             with pytest.raises(RuntimeError) as exc:
-                mgr._find_gadget("arm64-v8a")
+                mgr._gadget_for("arm64-v8a")
         assert "frida-gadget" in str(exc.value)
 
     def test_finds_versioned_gadget(self, tmp_path):
@@ -125,4 +136,15 @@ class TestGadgetDiscovery:
         with patch("repackagemanager._TOOLS", tmp_path), \
                 patch("repackagemanager._host_frida_version", return_value="17.15.3"), \
                 patch.dict(os.environ, {"FRIDA_GADGET_SO": ""}):
-            assert mgr._find_gadget("arm64-v8a") == str(so)
+            path, _ = mgr._gadget_for("arm64-v8a")
+            assert path == str(so)
+
+    def test_override_version_mismatch_errors(self, tmp_path):
+        mgr = _mgr(tmp_path)
+        so = tmp_path / "frida-gadget-16.0.0-android-arm64.so"
+        so.write_text("x")
+        with patch("repackagemanager._host_frida_version", return_value="17.15.3"), \
+                patch.dict(os.environ, {"FRIDA_GADGET_SO": str(so)}):
+            with pytest.raises(RuntimeError) as exc:
+                mgr._gadget_for("arm64-v8a")
+        assert "does not match host frida" in str(exc.value)

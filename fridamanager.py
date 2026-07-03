@@ -13,6 +13,9 @@ The frida_* tools raise a clear setup hint only when actually called.
 
 import threading
 import uuid
+from pathlib import Path
+
+_PRESET_DIR = Path(__file__).parent / "frida_presets"
 
 try:
     import frida
@@ -234,6 +237,22 @@ class FridaManager:
         return (f"Script loaded in session {session_id}"
                 f"{' and process resumed' if resumed else ''}. "
                 f"Use frida_read_messages to read script output.")
+
+    def run_preset(self, session_id: str, preset_name: str) -> str:
+        """Load a bundled preset script (e.g. 'ssl-unpin') into a session.
+
+        Works for both frida-server and gadget-injected (non-root) sessions.
+        """
+        name = preset_name if preset_name.endswith(".js") else preset_name + ".js"
+        path = (_PRESET_DIR / name).resolve()
+        try:
+            path.relative_to(_PRESET_DIR.resolve())
+        except ValueError:
+            raise RuntimeError("Invalid preset name.")
+        if not path.is_file():
+            avail = sorted(p.stem for p in _PRESET_DIR.glob("*.js"))
+            raise RuntimeError(f"Preset '{preset_name}' not found. Available: {avail}")
+        return self.run_script(session_id, path.read_text(encoding="utf-8"))
 
     def read_messages(self, session_id: str) -> str:
         """Drain buffered messages emitted by the session's script."""

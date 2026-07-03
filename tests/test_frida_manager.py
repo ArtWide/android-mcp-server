@@ -102,6 +102,21 @@ class TestCompatibility:
         assert "MATCH (exact)" in out
 
 
+class TestPreset:
+    def test_unknown_preset_raises(self):
+        mgr = FridaManager(MagicMock())
+        with pytest.raises(RuntimeError) as exc:
+            mgr.run_preset("sid", "does-not-exist")
+        assert "not found" in str(exc.value)
+
+    def test_known_preset_loads(self):
+        mgr = FridaManager(MagicMock())
+        with patch.object(mgr, "run_script", return_value="loaded") as rs:
+            mgr.run_preset("sid", "ssl-unpin")
+        rs.assert_called_once()
+        assert "Java.perform" in rs.call_args[0][1]
+
+
 class TestSessionLifecycle:
     def _device_with_session(self):
         device = MagicMock()

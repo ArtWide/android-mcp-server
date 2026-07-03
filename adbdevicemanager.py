@@ -304,6 +304,90 @@ class AdbDeviceManager:
             model = "?"
         return f"Active device: {serial} ({model})"
 
+    def install_and_launch(self, apk_path: str, package: str = "",
+                           launch: bool = True, uninstall_existing: bool = True) -> str:
+        """Install a (re-signed) APK, optionally removing a conflicting install first.
+
+        A re-signed APK has a different signature than any existing copy, so the
+        prior install must be removed or the install fails with
+        INSTALL_FAILED_UPDATE_INCOMPATIBLE. Raw install errors are returned as-is.
+        """
+        p = Path(apk_path)
+        if not p.is_file():
+            raise RuntimeError(f"APK not found: {apk_path}")
+        steps = []
+        if uninstall_existing and package:
+            try:
+                self.device.uninstall(package)
+                steps.append(f"removed existing {package}")
+            except Exception as e:
+                steps.append(f"uninstall skipped ({e})")
+        try:
+            self.device.install(str(p), reinstall=False, grand_all_permissions=True)
+        except Exception as e:
+            return (f"INSTALL FAILED: {e}\n"
+                    f"  (steps so far: {'; '.join(steps) or 'none'})\n"
+                    f"  If signature/downgrade conflict: uninstall the old app first "
+                    f"(pass package=, uninstall_existing=True).")
+        steps.append(f"installed {p.name}")
+        if launch and package:
+            out = self.device.shell(
+                f"monkey -p {package} -c android.intent.category.LAUNCHER 1")
+            steps.append("launched" if "No activities found" not in (out or "")
+                         else "launch failed (no launcher activity)")
+        undo = f"adb uninstall {package}" if package else "adb uninstall <package>"
+        return "; ".join(steps) + f"  | undo: {undo}"
+
+    def install_user_ca(self, cert_source: str = "",
+                        device_dir: str = "/sdcard/Download") -> str:
+        """Push a CA cert to the device and open the install screen (user completes).
+
+        Non-root user-CA install cannot be fully automated: the final security
+        confirmation must be done by the user on the device. targetSdk>=24 apps
+        do not trust user CAs by default — pair with
+        repackage_apk_frida(trust_user_certs=True).
+        """
+        # Resolve the certificate to a local file.
+        local = _HERE / "workspace" / "certs"
+        local.mkdir(parents=True, exist_ok=True)
+        cert = local / "mitmproxy-ca.cer"
+        try:
+            if cert_source.startswith("http://") or cert_source.startswith("https://"):
+                import urllib.request
+                urllib.request.urlretrieve(cert_source, cert)
+                origin = cert_source
+            elif cert_source:
+                src = Path(cert_source)
+                if not src.is_file():
+                    raise RuntimeError(f"cert not found: {cert_source}")
+                shutil.copy(src, cert)
+                origin = str(src)
+            else:
+                default = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.cer"
+                if not default.is_file():
+                    raise RuntimeError(
+                        f"No cert given and default not found: {default}. "
+                        "Run mitmproxy once to generate it, or pass cert_source.")
+                shutil.copy(default, cert)
+                origin = str(default)
+        except Exception as e:
+            raise RuntimeError(f"Could not obtain CA cert: {e}")
+
+        remote = f"{device_dir.rstrip('/')}/mitmproxy-ca.cer"
+        self.device.push(str(cert), remote)
+        # Open the security settings so the user can finish the install.
+        self.device.shell("am start -a android.settings.SECURITY_SETTINGS")
+        return (
+            f"Pushed CA ({origin}) -> {remote}. Opened Security settings.\n"
+            "Finish ON THE DEVICE (final confirmation is manual, by design):\n"
+            "  Settings -> Security -> Encryption & credentials -> Install a "
+            "certificate -> CA certificate -> (accept warning) -> pick "
+            "'mitmproxy-ca.cer' in Downloads.\n"
+            "Note: targetSdk>=24 apps ignore user CAs — also use "
+            "repackage_apk_frida(trust_user_certs=True) for those.\n"
+            "Undo: Settings -> Security -> Encryption & credentials -> User "
+            "certificates -> remove it.")
+
     def take_screenshot(self) -> str:
         self.device.shell("screencap -p /sdcard/screenshot.png")
         self.device.pull("/sdcard/screenshot.png", SCREENSHOT_PATH)

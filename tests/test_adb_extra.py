@@ -93,6 +93,41 @@ class TestFileTransfer:
         assert "not found" in str(exc.value)
 
 
+class TestInstallAndLaunch:
+    def test_uninstall_install_launch(self, tmp_path):
+        mgr = _manager()
+        f = tmp_path / "r.apk"; f.write_text("apk")
+        mgr.device.shell.return_value = "ok"
+        out = mgr.install_and_launch(str(f), package="com.x", launch=True)
+        mgr.device.uninstall.assert_called_once_with("com.x")
+        mgr.device.install.assert_called_once()
+        assert "installed" in out and "undo" in out
+
+    def test_install_error_returned_raw(self, tmp_path):
+        mgr = _manager()
+        f = tmp_path / "r.apk"; f.write_text("apk")
+        mgr.device.install.side_effect = Exception("INSTALL_FAILED_UPDATE_INCOMPATIBLE")
+        out = mgr.install_and_launch(str(f), package="com.x")
+        assert "INSTALL FAILED" in out and "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out
+
+
+class TestInstallUserCa:
+    def test_local_cert(self, tmp_path):
+        mgr = _manager()
+        cert = tmp_path / "ca.cer"; cert.write_text("PEM")
+        out = mgr.install_user_ca(str(cert))
+        mgr.device.push.assert_called_once()
+        mgr.device.shell.assert_any_call(
+            "am start -a android.settings.SECURITY_SETTINGS")
+        assert "Undo" in out
+
+    def test_missing_local_cert(self, tmp_path):
+        mgr = _manager()
+        with pytest.raises(RuntimeError) as exc:
+            mgr.install_user_ca(str(tmp_path / "nope.cer"))
+        assert "not found" in str(exc.value)
+
+
 class TestDeviceSelection:
     @patch("adbdevicemanager.AdbClient")
     @patch.object(AdbDeviceManager, "get_available_devices")
