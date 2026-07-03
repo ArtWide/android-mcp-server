@@ -36,6 +36,16 @@ _STRING = (163, 21, 21)
 _NUMBER = (9, 134, 88)
 _NAME = (121, 94, 38)
 
+# Dark theme for log / packet "evidence" figures (dynamic-execution evidence:
+# logcat, process list, /proc/net, etc.) with a right-side annotation column.
+_D_BG = (30, 32, 38)
+_D_GUTTER_BG = (24, 26, 31)
+_D_GUTTER_FG = (110, 116, 128)
+_D_FG = (214, 218, 226)
+_D_GREEN = (126, 197, 122)    # # comments + >> annotations
+_D_RED = (224, 78, 78)        # boxes
+_D_CONNECT = (96, 102, 116)   # box -> annotation connector
+
 _CODE_FONT_CANDIDATES = [
     os.environ.get("CODE_FONT_PATH", ""),
     "C:/Windows/Fonts/consola.ttf",
@@ -249,6 +259,117 @@ class CodeImageRenderer:
         self.outdir.mkdir(parents=True, exist_ok=True)
         # Deterministic-ish filename from content so repeated renders don't pile up.
         stem = f"code-{abs(hash((code, tuple(highlight_lines), title))) & 0xffffffff:08x}"
+        path = self.outdir / f"{stem}.png"
+        img.save(path, "PNG")
+        return str(path)
+
+    def render_log_evidence(
+        self,
+        text: str,
+        annotations: list[dict] | None = None,
+        highlight_lines: list[int] | None = None,
+        title: str = "",
+        start_line: int = 1,
+    ) -> str:
+        """Render log/packet evidence to a dark-theme PNG with a right-side
+        annotation column (the report's dynamic-evidence figure style).
+
+        Each annotated line gets a red box around the log line and a green
+        `>> <설명>` in the right column, joined by a connector. Boxes default to
+        the annotated lines. Annotations/highlights on a blank or out-of-range
+        line are dropped (no empty boxes).
+
+        Args:
+            text: the raw log/packet text (logcat, process list, /proc/net, ...).
+            annotations: [{"line": int, "text": "<한국어 설명>"}].
+            highlight_lines: lines to box; default = the annotated lines.
+            title: caption drawn above (e.g. "[증거5] 동적 실행 — C2 비콘").
+            start_line: number shown for the first line in the gutter.
+        """
+        ann_by_line: dict[int, str] = {}
+        for a in annotations or []:
+            try:
+                ann_by_line[int(a["line"])] = str(a["text"])
+            except (KeyError, ValueError, TypeError):
+                continue
+
+        code_font = _load_font(_CODE_FONT_CANDIDATES, self.font_size)
+        kr_font = _load_font(_KR_FONT_CANDIDATES, self.font_size)
+        title_font = _load_font(_KR_FONT_CANDIDATES, self.font_size + 3)
+
+        raw = text.replace("\t", "    ").split("\n")
+        if len(raw) > 1 and raw[-1] == "":
+            raw.pop()
+        lines = raw
+
+        content = {start_line + i for i, s in enumerate(lines) if s.strip()}
+        hl = set(highlight_lines) if highlight_lines else set(ann_by_line.keys())
+        hl &= content
+        ann_by_line = {k: v for k, v in ann_by_line.items() if k in content}
+
+        ascent = max(code_font.getmetrics()[0], kr_font.getmetrics()[0])
+        descent = max(code_font.getmetrics()[1], kr_font.getmetrics()[1])
+        line_pad = 8
+        line_h = ascent + descent + line_pad
+        pad = 18
+
+        scratch = ImageDraw.Draw(PILImage.new("RGB", (1, 1)))
+        char_w = scratch.textlength("M", font=code_font) or self.font_size * 0.6
+        last_no = start_line + len(lines) - 1
+        gutter_w = int(char_w * (len(str(last_no)) + 2))
+        title_h = (line_h + pad) if title else 0
+
+        def _font_for(s):
+            return code_font if _is_ascii(s) else kr_font
+
+        code_w = 0
+        for s in lines:
+            code_w = max(code_w, scratch.textlength(s, font=_font_for(s)))
+        code_right = pad + gutter_w + int(code_w) + pad
+        annot_w = 0
+        for v in ann_by_line.values():
+            annot_w = max(annot_w, scratch.textlength(">> " + v, font=kr_font))
+        gap = 30
+        annot_x = code_right + gap
+        width = int(annot_x + annot_w + pad) if ann_by_line else int(code_right + pad)
+        if title:
+            width = max(width, int(pad + scratch.textlength(title, font=title_font) + pad))
+        height = int(pad + title_h + len(lines) * line_h + pad)
+
+        img = PILImage.new("RGB", (width, height), _D_BG)
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([0, 0, pad + gutter_w - int(char_w / 2), height], fill=_D_GUTTER_BG)
+        if title:
+            draw.text((pad, pad), title, font=title_font, fill=_D_GREEN)
+
+        top0 = pad + title_h
+        line_top = {}
+        for i, s in enumerate(lines):
+            lineno = start_line + i
+            top = top0 + i * line_h
+            line_top[lineno] = top
+            baseline = top + ascent
+            num = str(lineno)
+            nx = pad + gutter_w - int(char_w) - scratch.textlength(num, font=code_font)
+            draw.text((nx, baseline), num, font=code_font, fill=_D_GUTTER_FG, anchor="ls")
+            color = _D_GREEN if s.lstrip().startswith("#") else _D_FG
+            draw.text((pad + gutter_w, baseline), s, font=_font_for(s), fill=color, anchor="ls")
+
+        for lineno in sorted(hl):
+            top = line_top[lineno] - 1
+            bottom = line_top[lineno] + line_h - line_pad + 1
+            draw.rectangle([pad + gutter_w - 4, top, code_right, bottom],
+                           outline=_D_RED, width=2)
+
+        for lineno, txt in ann_by_line.items():
+            top = line_top[lineno]
+            mid = top + (ascent + descent) // 2
+            draw.line([code_right, mid, annot_x - 8, mid], fill=_D_CONNECT, width=1)
+            draw.text((annot_x, top + ascent), ">> " + txt, font=kr_font,
+                      fill=_D_GREEN, anchor="ls")
+
+        self.outdir.mkdir(parents=True, exist_ok=True)
+        stem = f"log-{abs(hash((text, title, tuple(sorted(ann_by_line.items()))))) & 0xffffffff:08x}"
         path = self.outdir / f"{stem}.png"
         img.save(path, "PNG")
         return str(path)

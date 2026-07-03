@@ -778,6 +778,38 @@ def render_code_image(
 
 
 @mcp.tool()
+def render_log_evidence(
+    text: str,
+    annotations: list[dict] | None = None,
+    highlight_lines: list[int] | None = None,
+    title: str = "",
+    start_line: int = 1,
+) -> Image:
+    """Render log/packet evidence to a dark-theme PNG for the report — the
+    dynamic-evidence figure style (logcat, process list, /proc/net, packet).
+
+    Each annotated line gets a red box around the line and a green `>> <설명>` in
+    a right-side column joined by a connector. Boxes default to the annotated
+    lines. Annotations/highlights on a blank or out-of-range line are dropped, so
+    empty boxes never render. Use this instead of a Cowork artifact so every
+    report figure looks identical.
+    Args:
+        text (str): Raw log/packet text.
+        annotations (list[dict]): [{"line": int, "text": "<한국어 설명>"}] shown
+            in the right column, aligned to that line.
+        highlight_lines (list[int]): Lines to box; default = the annotated lines.
+        title (str): Caption above (e.g. "[증거5] 동적 실행 — C2 비콘").
+        start_line (int): Number shown for the first line.
+    Returns:
+        Image: the rendered PNG
+    """
+    path = codeRenderer.render_log_evidence(
+        text, annotations=annotations, highlight_lines=highlight_lines,
+        title=title, start_line=start_line)
+    return Image(path=path)
+
+
+@mcp.tool()
 def network_start_capture(port: int = 8080) -> str:
     """Start capturing the device's network traffic via mitmproxy.
 

@@ -86,3 +86,23 @@ class TestRender:
         # highlight by the displayed line number
         path = r.render_code_image(_JAVA, start_line=100, highlight_lines=[101])
         assert os.path.isfile(path)
+
+
+class TestLogEvidence:
+    def test_produces_png(self, tmp_path):
+        r = CodeImageRenderer(output_dir=str(tmp_path))
+        text = "line one\n\nline three\n"
+        p = r.render_log_evidence(
+            text, annotations=[{"line": 1, "text": "주석"}], title="[증거1]")
+        assert os.path.isfile(p)
+        with Image.open(p) as im:
+            assert im.format == "PNG"
+
+    def test_blank_and_oob_annotations_skipped(self, tmp_path):
+        r = CodeImageRenderer(output_dir=str(tmp_path))
+        # line 2 blank + line 99 out of range -> no empty boxes, no crash
+        p = r.render_log_evidence(
+            "a\n\nb",
+            annotations=[{"line": 2, "text": "빈줄"}, {"line": 99, "text": "oob"},
+                         {"line": 1, "text": "ok"}])
+        assert os.path.isfile(p)
