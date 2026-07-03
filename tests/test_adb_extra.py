@@ -93,6 +93,45 @@ class TestFileTransfer:
         assert "not found" in str(exc.value)
 
 
+class TestDeviceSelection:
+    @patch("adbdevicemanager.AdbClient")
+    @patch.object(AdbDeviceManager, "get_available_devices")
+    def test_list_devices_marks_active(self, mock_get, mock_client):
+        mgr = _manager()
+        mgr.device.serial = "dev1"
+        mock_get.return_value = ["dev1", "dev2"]
+        mock_client.return_value.device.return_value.shell.return_value = "Pixel"
+        out = mgr.list_devices()
+        assert "dev1" in out and "dev2" in out
+        assert "<- active" in out
+
+    @patch("adbdevicemanager.AdbClient")
+    @patch.object(AdbDeviceManager, "get_available_devices")
+    def test_select_device_switches(self, mock_get, mock_client):
+        mgr = _manager()
+        mock_get.return_value = ["dev1", "dev2"]
+        new_dev = MagicMock()
+        mock_client.return_value.device.return_value = new_dev
+        out = mgr.select_device("dev2")
+        assert mgr.device == new_dev
+        assert "dev2" in out
+
+    @patch.object(AdbDeviceManager, "get_available_devices")
+    def test_select_device_not_found(self, mock_get):
+        mgr = _manager()
+        mock_get.return_value = ["dev1"]
+        with pytest.raises(RuntimeError) as exc:
+            mgr.select_device("devX")
+        assert "not found" in str(exc.value)
+
+    def test_get_current_device(self):
+        mgr = _manager()
+        mgr.device.serial = "dev1"
+        mgr.device.shell.return_value = "Pixel 5"
+        out = mgr.get_current_device()
+        assert "dev1" in out and "Pixel 5" in out
+
+
 class TestLogcat:
     def test_builds_command(self):
         mgr = _manager()

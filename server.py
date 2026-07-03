@@ -237,6 +237,38 @@ codeRenderer = CodeImageRenderer(output_dir=_workspace)
 
 
 @mcp.tool()
+def list_devices() -> str:
+    """List connected devices (serial + model), marking the active one.
+
+    When several devices are connected, show these to the analyst and let them
+    choose, then call select_device — instead of silently using the first.
+    Returns:
+        str: One line per device as 'serial\\tmodel' ('<- active' marks the current one)
+    """
+    return deviceManager.list_devices()
+
+
+@mcp.tool()
+def select_device(serial: str) -> str:
+    """Switch the active device that all subsequent tools operate on.
+    Args:
+        serial (str): The device serial from list_devices
+    Returns:
+        str: Confirmation of the new active device
+    """
+    return deviceManager.select_device(serial)
+
+
+@mcp.tool()
+def get_current_device() -> str:
+    """Report the currently active device (serial + model).
+    Returns:
+        str: The active device
+    """
+    return deviceManager.get_current_device()
+
+
+@mcp.tool()
 def get_packages() -> str:
     """
     Get all installed packages on the device

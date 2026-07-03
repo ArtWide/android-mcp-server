@@ -89,6 +89,11 @@ traffic", "tap this button / automate this screen", "why is the app crashing"
 4. `network_stop_capture` when done (restores the device proxy).
 
 ## Important rules
+- **Pick the device explicitly when several are connected.** The server
+  auto-selects the first device at startup. Call `list_devices`; if more than one
+  is connected, show them to the user and confirm which to use with
+  `select_device <serial>` before any device-affecting work. `get_current_device`
+  reports the active one.
 - **Decompile/decode once.** Call `jadx_decompile` / `apktool_decode` a single time per package, then search/read; never re-decompile to "refresh".
 - **Frida prerequisites.** Always `frida_check_compatibility` before frida work. Frida needs frida-server (root). On a non-rooted device, say so and fall back to static analysis instead of repeatedly retrying.
 - **`execute_adb_shell_command` is powerful.** It runs arbitrary shell commands. For anything that changes device/app state (uninstall, clear data, settings, file deletion, `pm`/`am force-stop`), confirm with the user first. Prefer the dedicated tools over raw shell when one exists.

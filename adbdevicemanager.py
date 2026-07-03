@@ -265,6 +265,45 @@ class AdbDeviceManager:
         return (f"Installed {p.name} "
                 f"(reinstall={reinstall}, grant={grant_permissions}, downgrade={downgrade})")
 
+    def list_devices(self) -> str:
+        """List connected (authorized) devices with model, marking the active one.
+
+        Use this to show the analyst the choices, then switch with select_device.
+        """
+        serials = self.get_available_devices()
+        if not serials:
+            return "No authorized devices connected."
+        active = self.device.serial if self.device else None
+        lines = []
+        for s in serials:
+            try:
+                model = AdbClient().device(s).shell("getprop ro.product.model").strip()
+            except Exception:
+                model = "?"
+            mark = "  <- active" if s == active else ""
+            lines.append(f"{s}\t{model}{mark}")
+        return "\n".join(lines)
+
+    def select_device(self, serial: str) -> str:
+        """Switch the active device that all subsequent tools operate on."""
+        serials = self.get_available_devices()
+        if serial not in serials:
+            raise RuntimeError(
+                f"Device '{serial}' not found. Available: {serials}")
+        self.device = AdbClient().device(serial)
+        return f"Active device set to {serial}."
+
+    def get_current_device(self) -> str:
+        """Report the currently active device serial and model."""
+        serial = self.device.serial if self.device else None
+        if not serial:
+            return "No active device."
+        try:
+            model = self.device.shell("getprop ro.product.model").strip()
+        except Exception:
+            model = "?"
+        return f"Active device: {serial} ({model})"
+
     def take_screenshot(self) -> str:
         self.device.shell("screencap -p /sdcard/screenshot.png")
         self.device.pull("/sdcard/screenshot.png", SCREENSHOT_PATH)
