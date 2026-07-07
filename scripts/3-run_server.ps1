@@ -54,8 +54,9 @@ if ($env:JAVA_HOME) { $pathAdds += (Join-Path $env:JAVA_HOME "bin") }
 if ($env:ADB_PATH)  { $pathAdds += $env:ADB_PATH }
 if ($pathAdds.Count -gt 0) { $env:PATH = ($pathAdds -join ";") + ";" + $env:PATH }
 
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Host "uv not found on PATH. Install uv first: https://docs.astral.sh/uv/" -ForegroundColor Red
+$venvPy = Join-Path $RepoDir ".venv\Scripts\python.exe"
+if (-not (Test-Path $venvPy) -and -not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Write-Host "No .venv and uv not found. Install uv and run 'uv sync': https://docs.astral.sh/uv/" -ForegroundColor Red
     exit 1
 }
 
@@ -73,16 +74,25 @@ if (Get-Command adb -ErrorAction SilentlyContinue) {
     Write-Host "[!] adb not found. Run scripts\0-setup_environment.ps1 first." -ForegroundColor Yellow
 }
 
-$serverArgs = @("run", "server.py")
+$serverArgs = @()
 if ($Transport) { $serverArgs += @("--transport", $Transport) }
 if ($BindHost)  { $serverArgs += @("--host", $BindHost) }
 if ($Port)      { $serverArgs += @("--port", $Port) }
 if ($Passthrough) { $serverArgs += $Passthrough }
 
-Write-Host "`nStarting: uv $($serverArgs -join ' ')" -ForegroundColor Cyan
 Push-Location $RepoDir
 try {
-    & uv @serverArgs
+    if (Test-Path $venvPy) {
+        # Run the project venv Python directly. `uv run` spawns uv's *managed*
+        # Python (under %APPDATA%\uv\python), which Windows Smart App Control
+        # blocks on some machines ("Failed to spawn: python", os error 4551);
+        # the venv interpreter is unaffected.
+        Write-Host "`nStarting: .venv\Scripts\python.exe server.py $($serverArgs -join ' ')" -ForegroundColor Cyan
+        & $venvPy server.py @serverArgs
+    } else {
+        Write-Host "`n.venv not found - falling back to 'uv run' (run 'uv sync' first if this is blocked)." -ForegroundColor Yellow
+        & uv run server.py @serverArgs
+    }
 } finally {
     Pop-Location
 }

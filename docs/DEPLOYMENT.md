@@ -32,6 +32,20 @@ powershell -ExecutionPolicy Bypass -File scripts\3-run_server.ps1
 > terminal) is enough; if you run `server.py` directly instead, open a fresh
 > terminal first so it inherits them.
 
+### Troubleshooting: "Failed to spawn: python" (Smart App Control)
+
+On Windows with **Smart App Control (SAC)** on, `uv run` can fail with
+`Failed to spawn: python ... 애플리케이션 제어 정책에서 이 파일을 차단했습니다 (os error 4551)`
+— SAC blocks uv's *managed* Python (an unsigned exe under `%APPDATA%\uv\python`).
+The project's `.venv\Scripts\python.exe` is unaffected, so `3-run_server.ps1`
+runs the server with the venv interpreter directly (no `uv run`) and this is
+avoided. If you still hit it during `uv sync` on a fresh machine: create the
+venv from an allowed interpreter, or check SAC state at
+`HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState`
+(0=off, 1=on, 2=eval) and the block in Event Viewer →
+`Microsoft-Windows-CodeIntegrity/Operational`. SAC is reputation-based (not an
+AV exclusion), so Defender folder exclusions do not help.
+
 ## Connecting Claude — what actually works here
 
 ### The web org connector does NOT work for a local server
