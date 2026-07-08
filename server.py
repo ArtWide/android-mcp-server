@@ -13,6 +13,7 @@ from fridamanager import FridaManager
 from imagerender import CodeImageRenderer
 from jadxmanager import JadxManager
 from networkmanager import NetworkCaptureManager
+from readiness import dynamic_readiness
 from repackagemanager import RepackageManager
 from staticmanager import StaticAnalysisManager
 
@@ -655,6 +656,42 @@ def install_user_ca(cert_source: str = "") -> str:
              repackage_apk_frida(trust_user_certs=True) for targetSdk>=24 apps.
     """
     return deviceManager.install_user_ca(cert_source)
+
+
+@mcp.tool()
+def install_system_ca(cert_source: str = "") -> str:
+    """Install a CA into the device's SYSTEM trust store (ROOTED devices).
+
+    Fully automated (no on-device tap) and trusted by ALL apps, including
+    targetSdk>=24 apps that ignore user CAs. Uses a reversible tmpfs overlay on
+    /system/etc/security/cacerts. This is the recommended way to decrypt HTTPS
+    on a rooted analysis device. Apps with certificate pinning still need
+    frida_run_preset('ssl-unpin'). Returns the full device log + undo command.
+    Args:
+        cert_source (str): Local .cer/.pem path or http(s) URL; empty = host
+                           ~/.mitmproxy/mitmproxy-ca-cert.cer
+    Returns:
+        str: Install status, undo command, and raw device log
+    """
+    return deviceManager.install_system_ca(cert_source)
+
+
+@mcp.tool()
+def check_dynamic_readiness(cert_source: str = "") -> str:
+    """Check the whole dynamic-analysis stack in one call.
+
+    Reports device + root, Frida host/server version match, mitmproxy (host
+    binary + CA), HTTPS trust on the device (system/user CA), active capture,
+    and the non-root repackaging toolchain -- each as [OK]/[!]/[X] with a fix
+    hint. Read-only. Run this before installing/running a sample.
+    Args:
+        cert_source (str): CA to check device trust for; empty = the default
+                           mitmproxy CA
+    Returns:
+        str: A readiness checklist
+    """
+    return dynamic_readiness(
+        deviceManager, fridaManager, networkManager, repackageManager, cert_source)
 
 
 @mcp.tool()

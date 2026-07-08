@@ -338,16 +338,9 @@ class AdbDeviceManager:
         undo = f"adb uninstall {package}" if package else "adb uninstall <package>"
         return "; ".join(steps) + f"  | undo: {undo}"
 
-    def install_user_ca(self, cert_source: str = "",
-                        device_dir: str = "/sdcard/Download") -> str:
-        """Push a CA cert to the device and open the install screen (user completes).
-
-        Non-root user-CA install cannot be fully automated: the final security
-        confirmation must be done by the user on the device. targetSdk>=24 apps
-        do not trust user CAs by default — pair with
-        repackage_apk_frida(trust_user_certs=True).
-        """
-        # Resolve the certificate to a local file.
+    def _resolve_ca_cert(self, cert_source: str = ""):
+        """Resolve a CA cert (URL, path, or the default mitmproxy CA) to a local
+        PEM file in the workspace. Returns (cert_path: Path, origin: str)."""
         local = _HERE / "workspace" / "certs"
         local.mkdir(parents=True, exist_ok=True)
         cert = local / "mitmproxy-ca.cer"
@@ -372,7 +365,125 @@ class AdbDeviceManager:
                 origin = str(default)
         except Exception as e:
             raise RuntimeError(f"Could not obtain CA cert: {e}")
+        return cert, origin
 
+    @staticmethod
+    def _ca_hash_filename(cert_path) -> str:
+        """The Android system-store filename for a CA: OpenSSL subject_hash_old
+        + '.0' (MD5 of the DER-encoded subject, first 4 bytes little-endian)."""
+        import hashlib
+
+        from cryptography import x509
+        data = Path(cert_path).read_bytes()
+        try:
+            cert = x509.load_pem_x509_certificate(data)
+        except ValueError:
+            cert = x509.load_der_x509_certificate(data)
+        md5 = hashlib.md5(cert.subject.public_bytes()).digest()
+        val = int.from_bytes(md5[:4], "little")
+        return f"{val:08x}.0"
+
+    def is_rooted(self) -> bool:
+        """True if the device grants root via su (uid=0)."""
+        try:
+            out = self.device.shell("su -c id 2>/dev/null") or ""
+        except Exception:
+            return False
+        return "uid=0" in out
+
+    def ca_trust_status(self, cert_source: str = "") -> dict:
+        """Report whether a CA is in the system / user trust store on the device.
+
+        Returns {filename, in_system, in_user, rooted}. User-store check needs
+        root (the added-user dir is not world-readable)."""
+        cert, _ = self._resolve_ca_cert(cert_source)
+        fname = self._ca_hash_filename(cert)
+        rooted = self.is_rooted()
+        sys_ls = self.device.shell(
+            f"ls /system/etc/security/cacerts/{fname} 2>/dev/null") or ""
+        in_system = fname in sys_ls and "No such" not in sys_ls
+        in_user = False
+        if rooted:
+            usr_ls = self.device.shell(
+                f"su -c 'ls /data/misc/user/0/cacerts-added/{fname}' 2>/dev/null") or ""
+            in_user = fname in usr_ls and "No such" not in usr_ls
+        return {"filename": fname, "in_system": in_system,
+                "in_user": in_user, "rooted": rooted}
+
+    def install_system_ca(self, cert_source: str = "") -> str:
+        """Install a CA into the Android SYSTEM trust store (rooted devices).
+
+        Fully automated (no on-device confirmation) and trusted by ALL apps
+        including targetSdk>=24 (unlike user CAs). Uses a tmpfs overlay on
+        /system/etc/security/cacerts, so it needs no writable /system and is
+        reversible (undo = unmount). Apps with certificate pinning still need
+        frida_run_preset('ssl-unpin'). State-changing: returns the full device
+        log and the undo command.
+        """
+        if not self.is_rooted():
+            raise RuntimeError(
+                "Device is not rooted (su -c id != uid=0). For non-root devices "
+                "use install_user_ca (+ repackage_apk_frida trust_user_certs), "
+                "or bypass trust with frida_run_preset('ssl-unpin').")
+        cert, origin = self._resolve_ca_cert(cert_source)
+        fname = self._ca_hash_filename(cert)
+        sdk = (self.device.shell("getprop ro.build.version.sdk") or "").strip()
+        remote_tmp = f"/data/local/tmp/{fname}"
+        self.device.push(str(cert), remote_tmp)
+
+        certs = "/system/etc/security/cacerts"
+        copy = "/data/local/tmp/.cacerts-overlay"
+        # One root shell: seed a tmpfs with the existing system certs + ours,
+        # then mount it over the cacerts dir. Reversible via `umount`.
+        script = (
+            f"rm -rf {copy}; mkdir -p {copy}; "
+            f"cp {certs}/* {copy}/ 2>/dev/null; "
+            f"cp {remote_tmp} {copy}/{fname}; chmod 644 {copy}/*; "
+            f"mount -t tmpfs tmpfs {certs} && "
+            f"cp {copy}/* {certs}/ && "
+            f"chown 0:0 {certs}/* && chmod 644 {certs}/* && "
+            f"(restorecon {certs}/* 2>/dev/null || true) && "
+            f"echo INSTALLED count=$(ls {certs} | wc -l)"
+        )
+        out = self.device.shell(f"su -c '{script}'") or ""
+        check = self.device.shell(
+            f"su -c 'ls {certs}/{fname}' 2>/dev/null") or ""
+        installed = "INSTALLED" in out and fname in check
+
+        undo = f"adb shell su -c 'umount {certs}'  (or reboot)"
+        header = (
+            f"System-CA install: {'OK' if installed else 'FAILED'} "
+            f"({fname}, from {origin}, SDK {sdk or '?'})")
+        notes = []
+        if not installed:
+            notes.append(
+                "Did NOT verify the cert in the store. Raw device log below — "
+                "do not guess; if `mount`/`cp` errored, the ROM may block tmpfs "
+                "on /system or use a read-only mount.")
+        if sdk.isdigit() and int(sdk) >= 34:
+            notes.append(
+                "Android 14+ (SDK>=34): the real trust store is the APEX "
+                "conscrypt dir; a /system overlay may NOT be honored by all "
+                "apps. If HTTPS still fails, use a Magisk cert module or "
+                "frida_run_preset('ssl-unpin').")
+        return (
+            f"{header}\n"
+            f"  undo: {undo}\n"
+            + ("".join(f"  note: {n}\n" for n in notes))
+            + f"--- device log ---\n{out.strip()}\n"
+            f"--- verify (ls {fname}) ---\n{check.strip() or '(not found)'}")
+
+    def install_user_ca(self, cert_source: str = "",
+                        device_dir: str = "/sdcard/Download") -> str:
+        """Push a CA cert to the device and open the install screen (user completes).
+
+        Non-root user-CA install cannot be fully automated: the final security
+        confirmation must be done by the user on the device. targetSdk>=24 apps
+        do not trust user CAs by default — pair with
+        repackage_apk_frida(trust_user_certs=True). On a rooted device prefer
+        install_system_ca (fully automated, trusted by all apps).
+        """
+        cert, origin = self._resolve_ca_cert(cert_source)
         remote = f"{device_dir.rstrip('/')}/mitmproxy-ca.cer"
         self.device.push(str(cert), remote)
         # Open the security settings so the user can finish the install.

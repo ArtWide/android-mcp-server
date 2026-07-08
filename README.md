@@ -23,7 +23,7 @@ and Code editors
 - 📸 Baseline capture/diff (before/after device-state snapshot: dropped
   packages, C2 sockets, device-admin / accessibility / default-SMS changes)
 
-48 tools total. The static / JADX / apktool tools accept a `target` that is an
+50 tools total. The static / JADX / apktool tools accept a `target` that is an
 installed package name **or a path to a local .apk file** (so uploaded droppers
 and downloaded payloads can be analyzed without a device). `apk_dropper_indicators`
 assesses dropper behaviour and surfaces candidate payload-download URLs. Two

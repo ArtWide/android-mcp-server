@@ -10,10 +10,11 @@ time to discover. Read this before re-litigating transport/connector decisions.
   new process per client and killed long-running sessions like frida).
 - Recommended deployment: **per-analyst, on the PC the device is attached to**,
   bound to `127.0.0.1`. The powerful adb/jadx/frida surface stays off the network.
-- Tools: 48 total across ADB/logcat, device selection, file transfer/install,
-  baseline capture/diff, JADX, androguard static, apktool, Frida, non-root
-  repackaging, mitmproxy network capture, and report-evidence rendering.
-  Managers are constructed once and reused for the process lifetime.
+- Tools: 50 total across ADB/logcat, device selection, file transfer/install,
+  CA trust (user + rooted system store), a dynamic-readiness preflight, baseline
+  capture/diff, JADX, androguard static, apktool, Frida, non-root repackaging,
+  mitmproxy network capture, and report-evidence rendering. Managers are
+  constructed once and reused for the process lifetime.
 
 ## Running the server
 
@@ -180,7 +181,12 @@ Frida (10), mitmproxy network (4).
 
 `network_start_capture` runs mitmdump, sets `adb reverse tcp:PORT tcp:PORT`, and
 sets the device's global HTTP proxy to `127.0.0.1:PORT`. HTTP is captured
-immediately; for **HTTPS** the device must trust the mitmproxy CA (browse
-`http://mitm.it` while proxied). On non-rooted Android 7+, only apps that trust
-user CAs (or with frida unpinning) are decrypted. `network_stop_capture` clears
-the proxy and removes the reverse.
+immediately; for **HTTPS** the device must trust the mitmproxy CA. On a
+**rooted** device use `install_system_ca` (automated tmpfs overlay on the system
+cacerts; trusted by all apps incl. targetSdk>=24, reversible via `umount`). On
+**non-rooted** Android 7+, only apps that trust user CAs (`install_user_ca` +
+`repackage_apk_frida(trust_user_certs=True)`) or with frida unpinning
+(`frida_run_preset('ssl-unpin')`) are decrypted. `network_stop_capture` clears
+the proxy and removes the reverse. `check_dynamic_readiness` confirms whether
+the CA landed and the rest of the stack is ready. Android 14+ (APEX conscrypt
+store) may ignore a /system overlay — use a Magisk cert module or ssl-unpin.
