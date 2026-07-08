@@ -20,8 +20,10 @@ and Code editors
 - 🧱 apktool (resource + smali decoding)
 - 🧬 Frida Dynamic Instrumentation (attach/spawn, script injection, live messages)
 - 🌐 mitmproxy Network Capture (device traffic proxy + flow listing)
+- 📸 Baseline capture/diff (before/after device-state snapshot: dropped
+  packages, C2 sockets, device-admin / accessibility / default-SMS changes)
 
-46 tools total. The static / JADX / apktool tools accept a `target` that is an
+48 tools total. The static / JADX / apktool tools accept a `target` that is an
 installed package name **or a path to a local .apk file** (so uploaded droppers
 and downloaded payloads can be analyzed without a device). `apk_dropper_indicators`
 assesses dropper behaviour and surfaces candidate payload-download URLs. Two

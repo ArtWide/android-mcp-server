@@ -10,8 +10,10 @@ time to discover. Read this before re-litigating transport/connector decisions.
   new process per client and killed long-running sessions like frida).
 - Recommended deployment: **per-analyst, on the PC the device is attached to**,
   bound to `127.0.0.1`. The powerful adb/jadx/frida surface stays off the network.
-- Tools: 5 ADB + 4 JADX + 10 Frida (19 total). Managers are constructed once and
-  reused for the process lifetime.
+- Tools: 48 total across ADB/logcat, device selection, file transfer/install,
+  baseline capture/diff, JADX, androguard static, apktool, Frida, non-root
+  repackaging, mitmproxy network capture, and report-evidence rendering.
+  Managers are constructed once and reused for the process lifetime.
 
 ## Running the server
 
@@ -167,6 +169,7 @@ Frida (10), mitmproxy network (4).
 | Tool group | Status |
 |------------|--------|
 | ADB + logcat (6) | Working — verified (get_packages: 454 pkgs, shell commands OK) |
+| Baseline capture/diff (2) | Read-only; best on a rooted device (/proc/net + app dirs fully readable) |
 | JADX (4) | Working — verified end-to-end (pull APK → decompile → search) |
 | androguard static (3) | Working — verified on Chrome (manifest, signing cert, secret scan); no root needed |
 | apktool (3) | Needs apktool + Java (installed by 0-setup_environment.ps1); no root needed |

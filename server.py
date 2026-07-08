@@ -8,6 +8,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from adbdevicemanager import AdbDeviceManager
 from apktoolmanager import ApktoolManager
+from baselinemanager import BaselineManager
 from fridamanager import FridaManager
 from imagerender import CodeImageRenderer
 from jadxmanager import JadxManager
@@ -238,6 +239,9 @@ repackageManager = RepackageManager(
     deviceManager, output_dir=_workspace,
     apktool_path=os.environ.get("APKTOOL_PATH") or _apktool_config.get("path") or None)
 codeRenderer = CodeImageRenderer(output_dir=_workspace)
+# Baseline capture/diff (before-after dynamic analysis). Read-only; operates on
+# the active device and stores per-run snapshots in the workspace.
+baselineManager = BaselineManager(deviceManager, output_dir=_workspace)
 
 
 @mcp.tool()
@@ -333,6 +337,46 @@ def get_package_action_intents(package_name: str) -> list[str]:
     """
     result = deviceManager.get_package_action_intents(package_name)
     return result
+
+
+@mcp.tool()
+def capture_baseline(label: str = "pre", watch_dirs: list[str] | None = None) -> str:
+    """Snapshot the active device's state for before/after dynamic analysis.
+
+    Read-only. Records installed packages (incl. third-party APK paths), running
+    processes, network sockets (/proc/net), active device-admins, security
+    settings (accessibility / notification listeners / default SMS·dialer), and
+    files under watched directories. Capture once BEFORE running a sample
+    (label='pre'), then again AFTER (label='post'), and compare with
+    diff_baseline to reveal the dropped payload, C2 socket, and banker/overlay
+    indicators. Snapshots are saved to the workspace (not KVault).
+    Args:
+        label (str): Snapshot name, e.g. 'pre' or 'post'
+        watch_dirs (list[str]): Dirs to inventory for dropped files (defaults to
+                                /data/local/tmp, /sdcard/Download,
+                                /sdcard/Android/data)
+    Returns:
+        str: A capture summary and the saved snapshot path
+    """
+    return baselineManager.capture_baseline(label, watch_dirs=watch_dirs)
+
+
+@mcp.tool()
+def diff_baseline(before: str = "pre", after: str = "post") -> str:
+    """Diff two device baselines to see what a sample changed after it ran.
+
+    Highlights new packages (dropped/installed payload), new remote sockets (C2
+    candidates), new device-admins, accessibility/notification-listener and
+    default SMS·dialer changes (banker/overlay), new processes, and new files in
+    watched dirs. Pass the labels used with capture_baseline (for the active
+    device) or explicit snapshot JSON paths.
+    Args:
+        before (str): Earlier snapshot label or JSON path (default 'pre')
+        after (str): Later snapshot label or JSON path (default 'post')
+    Returns:
+        str: A structured, section-by-section diff
+    """
+    return baselineManager.diff_baseline(before, after)
 
 
 @mcp.tool()
