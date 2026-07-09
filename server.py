@@ -328,6 +328,30 @@ def get_screenshot() -> Image:
 
 
 @mcp.tool()
+def wake_device(unlock: bool = True) -> str:
+    """Wake the device screen if it is off, and optionally dismiss the lock screen.
+
+    Safe to call during analysis: it only ever turns the screen ON (never off),
+    and every action is a no-op when not needed, so calling it while the device
+    is already awake and unlocked does nothing and will not disturb the app in
+    the foreground. It does not change persistent settings (screen timeout /
+    stay-awake), so it won't affect baseline diffs. A secure lock (PIN / pattern /
+    password) cannot be bypassed via adb; for a locked secure device this only
+    surfaces the credential prompt.
+
+    Use before screen-dependent steps (get_screenshot, get_uilayout, UI taps)
+    when the device may have gone to sleep on its inactivity timeout.
+
+    Args:
+        unlock (bool): Also dismiss the keyguard if one is showing (default True).
+                       Has no effect on an already-unlocked device.
+    Returns:
+        str: Before/after screen and lock state, plus the actions taken.
+    """
+    return deviceManager.wake_device(unlock=unlock)
+
+
+@mcp.tool()
 def get_package_action_intents(package_name: str) -> list[str]:
     """
     Get all non-data actions from Activity Resolver Table for a package
@@ -822,7 +846,7 @@ def check_repackage_toolchain() -> str:
     return repackageManager.check_toolchain()
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def render_code_image(
     code: str,
     language: str = "java",
@@ -830,7 +854,7 @@ def render_code_image(
     annotations: list[dict] | None = None,
     title: str = "",
     start_line: int = 1,
-) -> Image:
+) -> list:
     """Render a code snippet to an annotated PNG for the analysis report.
 
     Produces a syntax-highlighted, line-numbered image with red boxes around the
@@ -850,22 +874,25 @@ def render_code_image(
         start_line (int): Number shown for the first line (when the snippet
             starts partway through a file).
     Returns:
-        Image: the rendered PNG
+        list: two content blocks — (1) an inline PNG preview for immediate
+        viewing in chat, and (2) a text line ``path: <absolute path>`` giving
+        where the PNG was saved on disk (under ``<workspace>/reports``). The file
+        persists; embed that absolute path directly in the .docx/.md report.
     """
     path = codeRenderer.render_code_image(
         code, language=language, highlight_lines=highlight_lines,
         annotations=annotations, title=title, start_line=start_line)
-    return Image(path=path)
+    return [Image(path=path), f"path: {path}"]
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def render_log_evidence(
     text: str,
     annotations: list[dict] | None = None,
     highlight_lines: list[int] | None = None,
     title: str = "",
     start_line: int = 1,
-) -> Image:
+) -> list:
     """Render log/packet evidence to a dark-theme PNG for the report — the
     dynamic-evidence figure style (logcat, process list, /proc/net, packet).
 
@@ -882,12 +909,15 @@ def render_log_evidence(
         title (str): Caption above (e.g. "[증거5] 동적 실행 — C2 비콘").
         start_line (int): Number shown for the first line.
     Returns:
-        Image: the rendered PNG
+        list: two content blocks — (1) an inline PNG preview for immediate
+        viewing in chat, and (2) a text line ``path: <absolute path>`` giving
+        where the PNG was saved on disk (under ``<workspace>/reports``). The file
+        persists; embed that absolute path directly in the .docx/.md report.
     """
     path = codeRenderer.render_log_evidence(
         text, annotations=annotations, highlight_lines=highlight_lines,
         title=title, start_line=start_line)
-    return Image(path=path)
+    return [Image(path=path), f"path: {path}"]
 
 
 @mcp.tool()

@@ -31,6 +31,7 @@ traffic", "tap this button / automate this screen", "why is the app crashing"
 - `execute_adb_shell_command(command)` — run any adb shell command (powerful).
 - `get_uilayout` — clickable UI elements + center coordinates of the current screen.
 - `get_screenshot` — capture the screen as an image.
+- `wake_device(unlock=True)` — turn the screen on (and dismiss an insecure keyguard) if the device slept on its inactivity timeout. Safe/no-op when already awake+unlocked; never turns the screen off or changes settings. Call before `get_screenshot`/`get_uilayout`/taps if the screen may be off.
 - `get_package_action_intents(package_name)` — intent actions an app handles.
 - `get_logcat(lines, filter_spec, priority)` — recent device logs.
 
@@ -72,9 +73,10 @@ traffic", "tap this button / automate this screen", "why is the app crashing"
 - For resources, deep links, or smali: `apktool_decode(pkg)` → `apktool_list_files` / `apktool_read_file` (e.g. `AndroidManifest.xml`, `res/values/strings.xml`).
 
 **UI automation**
-1. `get_screenshot` + `get_uilayout` to see the screen and element coordinates.
-2. `execute_adb_shell_command("input tap X Y")` / `input text "..."` / `input keyevent KEYCODE_BACK`.
-3. `get_screenshot` to confirm the result. Repeat.
+1. `wake_device()` if the screen may have slept (inactivity timeout) — it's a no-op when already awake+unlocked.
+2. `get_screenshot` + `get_uilayout` to see the screen and element coordinates.
+3. `execute_adb_shell_command("input tap X Y")` / `input text "..."` / `input keyevent KEYCODE_BACK`.
+4. `get_screenshot` to confirm the result. Repeat.
 
 **Dynamic instrumentation (rooted device / emulator)**
 1. `frida_check_compatibility` — if frida-server is missing or version-mismatched, tell the user to run `scripts/1-setup_frida_server.ps1` (and that the device must be rooted). Do not proceed until it's compatible and running.

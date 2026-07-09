@@ -562,3 +562,92 @@ class AdbDeviceManager:
         else:
             result = "\n\n".join(clickable_elements)
             return result
+
+    def _read_power_state(self) -> tuple[bool | None, bool | None]:
+        """Best-effort read of (screen_awake, keyguard_locked) from dumpsys.
+
+        Either value is None when it can't be determined on this device/OS
+        version. Callers must treat None as "unknown" and stay non-destructive.
+        """
+        power = self.device.shell("dumpsys power") or ""
+        awake: bool | None = None
+        if "mWakefulness=Awake" in power:
+            awake = True
+        elif "mWakefulness=Asleep" in power or "mWakefulness=Dozing" in power:
+            awake = False
+        if awake is None:
+            display = self.device.shell("dumpsys display") or ""
+            if "mScreenState=ON" in display or "Display Power: state=ON" in power:
+                awake = True
+            elif "mScreenState=OFF" in display or "Display Power: state=OFF" in power:
+                awake = False
+
+        # Prefer `deviceLocked` from dumpsys trust (== KeyguardManager.isDeviceLocked):
+        # it reflects the real "credential required" state and matches ground truth,
+        # unlike window's mDreamingLockscreen which is stale on some Samsung ROMs.
+        import re
+        locked: bool | None = None
+        trust = self.device.shell("dumpsys trust") or ""
+        match = re.search(r"deviceLocked=(\d)", trust)
+        if match:
+            locked = match.group(1) == "1"
+        else:
+            window = self.device.shell("dumpsys window") or ""
+            for key in ("mDreamingLockscreen=", "mShowingLockscreen="):
+                idx = window.find(key)
+                if idx != -1:
+                    locked = window[idx + len(key):].lstrip().lower().startswith("true")
+                    break
+        return awake, locked
+
+    def wake_device(self, unlock: bool = True) -> str:
+        """Wake the screen if it is off and optionally dismiss a shown keyguard.
+
+        Designed to never interfere with analysis: it only ever turns the screen
+        ON (KEYCODE_WAKEUP, which the system consumes rather than delivering to the
+        foreground app), and both actions are skipped/no-ops when not needed, so
+        calling it on an already-awake, unlocked device changes nothing. It never
+        toggles power off and never alters persistent settings (screen timeout,
+        stay-awake), so it does not pollute baseline diffs. A secure lock cannot
+        be bypassed over adb; for a secure device it only surfaces the prompt.
+        """
+        before_awake, before_locked = self._read_power_state()
+        actions: list[str] = []
+
+        # Wake only if not already awake. KEYCODE_WAKEUP is idempotent (turns the
+        # screen on, never off) and is handled by the system, not the app.
+        if before_awake is not True:
+            self.device.shell("input keyevent KEYCODE_WAKEUP")
+            actions.append("sent KEYCODE_WAKEUP")
+        else:
+            actions.append("screen already on (no wake sent)")
+
+        # Dismiss the keyguard only when one may be showing. `wm dismiss-keyguard`
+        # targets the keyguard alone and is a no-op when none is present, so it
+        # won't tap or scroll the app under analysis. It cannot bypass a secure
+        # lock (PIN/pattern/password) — it only brings up the credential prompt.
+        if unlock and before_locked is not False:
+            self.device.shell("wm dismiss-keyguard")
+            actions.append("requested keyguard dismiss")
+        elif unlock:
+            actions.append("not locked (no dismiss sent)")
+
+        import time
+        time.sleep(0.5)  # let wake/dismiss settle so the after-state is accurate
+        after_awake, after_locked = self._read_power_state()
+
+        def fmt(value: bool | None) -> str:
+            return "unknown" if value is None else ("yes" if value else "no")
+
+        lines = [
+            "wake_device:",
+            f"  before: awake={fmt(before_awake)} locked={fmt(before_locked)}",
+            f"  actions: {', '.join(actions)}",
+            f"  after:  awake={fmt(after_awake)} locked={fmt(after_locked)}",
+        ]
+        if after_locked:
+            lines.append(
+                "  note: still locked. A secure lock (PIN/pattern/password) can't be "
+                "removed via adb — enter it on the device, or clear the lock for automation."
+            )
+        return "\n".join(lines)
