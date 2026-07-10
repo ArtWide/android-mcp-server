@@ -12,6 +12,13 @@ _HERE = Path(__file__).parent
 SCREENSHOT_PATH = str(_HERE / "screenshot.png")
 COMPRESSED_PATH = str(_HERE / "compressed_screenshot.png")
 
+# Default per-command timeout (seconds) for arbitrary device shell commands. A
+# blocking or unbounded command (e.g. a full-tree `find /data/data`, or `logcat`
+# without -d) would otherwise hang the ppadb read forever; the client then drops
+# the connection and the whole session looks "down". A timeout turns that into a
+# clean, recoverable error instead of a stuck worker thread.
+DEFAULT_SHELL_TIMEOUT = 60
+
 
 def _discover_adb_executable() -> str | None:
     adb_path = os.environ.get("ADB_PATH", "").strip()
@@ -164,14 +171,32 @@ class AdbDeviceManager:
 
         return actions
 
-    def execute_adb_shell_command(self, command: str) -> str:
-        """Executes an ADB command and returns the output."""
+    def execute_adb_shell_command(self, command: str,
+                                  timeout: float = DEFAULT_SHELL_TIMEOUT) -> str:
+        """Execute a device shell command, bounded by a timeout.
+
+        A blocking/unbounded command (full-tree find, non-`-d` logcat, a command
+        waiting on a lock, or su awaiting approval) would hang the ppadb read
+        forever and take the session down. `timeout` (seconds; <=0 disables)
+        bounds it and returns a clear, recoverable error instead of hanging.
+        """
         if command.startswith("adb shell "):
             command = command[10:]
         elif command.startswith("adb "):
             command = command[4:]
-        result = self.device.shell(command)
-        return result
+        try:
+            if timeout and timeout > 0:
+                return self.device.shell(command, timeout=timeout)
+            return self.device.shell(command)
+        except Exception as e:
+            return (
+                f"[shell command timed out or errored after {timeout}s] "
+                f"{type(e).__name__}: {e}\n"
+                "The command likely ran too long, blocked, or produced unbounded "
+                "output. Narrow it: target a specific path, add `-maxdepth N`, "
+                "pipe through `head`, avoid a full-tree `find /data/data`, and use "
+                "`logcat -d` (never blocking logcat). Raise the limit with the "
+                "tool's `timeout` argument if the command is legitimately slow.")
 
     def apk_remote_paths(self, package_name: str) -> list[str]:
         """Return the on-device APK path(s) for a package via `pm path`."""

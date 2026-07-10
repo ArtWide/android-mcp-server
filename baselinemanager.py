@@ -78,10 +78,14 @@ class BaselineManager:
         self.dir = base / "baseline"
 
     # -- helpers -----------------------------------------------------------
-    def _sh(self, cmd: str) -> str:
-        """Run a shell command on the active device; '' on error."""
+    def _sh(self, cmd: str, timeout: float = 30) -> str:
+        """Run a shell command on the active device (timeout-bounded); '' on error.
+
+        A stuck/slow command must not hang the whole capture, so every call is
+        bounded and failures degrade to an inline error marker.
+        """
         try:
-            return self.dm.device.shell(cmd) or ""
+            return self.dm.device.shell(cmd, timeout=timeout) or ""
         except Exception as e:
             return f"<error: {e}>"
 
@@ -173,19 +177,23 @@ class BaselineManager:
         return out
 
     def _files(self, watch_dirs: list[str]) -> dict:
-        """Inventory files (path -> size) under each watched directory."""
+        """Inventory files under each watched directory (path -> size).
+
+        One bounded, depth-limited, capped `find` per dir. Sizes come from the
+        same command (`-exec ls`), never a per-file `stat` loop -- that was N
+        round-trips and could itself time out on a large tree.
+        """
         result = {}
         for d in watch_dirs:
             files = {}
-            # -type f keeps it to files; depth-limited to avoid huge trees.
+            # Depth-limited + capped so a huge tree can neither hang nor flood.
             out = self._sh(
-                f"find {d} -maxdepth 4 -type f 2>/dev/null")
+                f"find {d} -maxdepth 4 -type f 2>/dev/null | head -n 800")
             for path in out.splitlines():
                 path = path.strip()
                 if not path or path.startswith("<error"):
                     continue
-                size = self._sh(f"stat -c %s '{path}' 2>/dev/null").strip()
-                files[path] = size if size.isdigit() else "?"
+                files[path] = ""  # presence is the signal; size omitted for speed
             result[d] = files
         return result
 
@@ -316,7 +324,9 @@ class BaselineManager:
             b_files = b.get("files", {}).get(d, {})
             added = sorted(set(a_files) - set(b_files))
             for f in added:
-                file_lines.append(f"    + {f} ({a_files[f]} bytes)")
+                size = a_files.get(f) or ""
+                file_lines.append(
+                    f"    + {f}" + (f" ({size} bytes)" if size else ""))
         if file_lines:
             lines.append("\n[+] NEW FILES in watched dirs (dropped payloads):")
             lines += file_lines

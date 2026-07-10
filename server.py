@@ -289,14 +289,20 @@ def get_packages() -> str:
 
 
 @mcp.tool()
-def execute_adb_shell_command(command: str) -> str:
-    """Executes an ADB command and returns the output or an error.
+def execute_adb_shell_command(command: str, timeout: float = 60) -> str:
+    """Executes an ADB shell command, bounded by a timeout, and returns output.
+
+    The timeout prevents a blocking or unbounded command (e.g. a full-tree
+    `find /data/data`, or a non-`-d` `logcat`) from hanging the session; on
+    timeout it returns a clear error with narrowing tips rather than stalling.
     Args:
         command (str): The ADB shell command to execute
+        timeout (float): Max seconds to wait (default 60; <=0 disables). Raise it
+                         only for a command that is legitimately slow.
     Returns:
-        str: The output of the ADB command
+        str: The output of the ADB command, or a timeout/error message
     """
-    result = deviceManager.execute_adb_shell_command(command)
+    result = deviceManager.execute_adb_shell_command(command, timeout=timeout)
     return result
 
 

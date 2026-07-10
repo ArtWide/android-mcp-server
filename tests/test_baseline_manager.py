@@ -27,7 +27,7 @@ class FakeDevice:
         self.serial = serial
         self.state = state
 
-    def shell(self, cmd):
+    def shell(self, cmd, timeout=None):
         s = self.state
         if cmd == "pm list packages":
             return "".join(f"package:{p}\n" for p in s["packages"])

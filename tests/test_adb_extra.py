@@ -93,6 +93,30 @@ class TestFileTransfer:
         assert "not found" in str(exc.value)
 
 
+class TestShellTimeout:
+    def test_passes_timeout_to_ppadb(self):
+        mgr = _manager()
+        mgr.device.shell.return_value = "out"
+        mgr.execute_adb_shell_command("ls", timeout=15)
+        _, kwargs = mgr.device.shell.call_args
+        assert kwargs.get("timeout") == 15
+
+    def test_timeout_returns_clean_message_not_raise(self):
+        mgr = _manager()
+        mgr.device.shell.side_effect = TimeoutError("timed out")
+        out = mgr.execute_adb_shell_command("su 0 find /data/data", timeout=5)
+        # must NOT propagate; returns a recoverable, actionable message
+        assert "timed out or errored" in out
+        assert "find /data/data" in out  # narrowing tip mentions the antipattern
+
+    def test_disabled_timeout_omits_kwarg(self):
+        mgr = _manager()
+        mgr.device.shell.return_value = "out"
+        mgr.execute_adb_shell_command("ls", timeout=0)
+        _, kwargs = mgr.device.shell.call_args
+        assert "timeout" not in kwargs
+
+
 class TestInstallAndLaunch:
     def test_uninstall_install_launch(self, tmp_path):
         mgr = _manager()
