@@ -1,13 +1,6 @@
 ---
 name: android-analysis
-description: >-
-  Analyze and automate Android devices and apps through the Android Local MCP
-  server. Use when the user wants to inspect a device/app, list or pull
-  packages, read permissions/manifests, decompile an APK (JADX/apktool), search
-  decompiled code, scan an app for hardcoded secrets/endpoints, capture or
-  inspect network traffic (mitmproxy), instrument an app at runtime (Frida),
-  drive the device UI (tap/type/screenshot), or read logcat. Covers reverse
-  engineering, mobile security review, app debugging, and UI automation.
+description: Analyze and automate Android devices/apps via the Android MCP: inspect app, pull/decompile APKs (JADX/apktool), scan secrets, capture network (mitmproxy), Frida instrument, drive UI, read logcat.
 ---
 
 # Android App & Device Analysis

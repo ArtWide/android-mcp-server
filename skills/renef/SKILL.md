@@ -1,13 +1,6 @@
 ---
 name: renef
-description: >-
-  Use when operating renef / renef.io to instrument Android ARM64 apps: hooking native and Java
-  functions, scanning/reading/writing/patching process memory, tracing syscalls (renef-strace),
-  stack backtraces, value/memory cheats, and writing Lua 5.4 scripts. Reach for this for SSL
-  pinning bypass, root/debugger detection bypass, function tracing, crypto key logging, game
-  memory editing/cheats, CTF native challenges, or porting Frida JS / GameGuardian (gg.*) scripts
-  to renef. Triggers: "renef", "renef.io", ".renef script", "renef-strace", "hook this Android
-  function", "bypass SSL pinning with renef", "port this Frida/GameGuardian script to renef".
+description: renef/renef.io로 Android ARM64 앱 계측: 네이티브/Java 후킹, 메모리 스캔·패치, 시스콜 트레이스, SSL 피닝·루트·디버거 우회, Lua 스크립트. Frida 탐지·차단 시 대체 엔진. 트리거: 'renef', 'renef 스크립트'.
 ---
 
 # Operating Renef
