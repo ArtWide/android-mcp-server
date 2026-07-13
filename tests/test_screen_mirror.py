@@ -130,3 +130,15 @@ class TestDiscover:
         exe.write_text("x")
         with patch.dict(os.environ, {"SCRCPY_PATH": str(exe)}):
             assert screenmirror._discover_scrcpy() == str(exe)
+
+    def test_finds_versioned_subdir(self, tmp_path):
+        # emulate ~/.android-mcp-tools/scrcpy/scrcpy-win64-vX/scrcpy.exe layout
+        exe = tmp_path / ".android-mcp-tools" / "scrcpy" / "scrcpy-win64-v4.1" / "scrcpy.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_text("x")
+        env = {k: v for k, v in os.environ.items() if k != "SCRCPY_PATH"}
+        with patch.dict(os.environ, env, clear=True), \
+                patch.object(screenmirror.shutil, "which", return_value=None), \
+                patch.object(screenmirror.Path, "home", return_value=tmp_path):
+            found = screenmirror._discover_scrcpy()
+        assert found == str(exe)

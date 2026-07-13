@@ -51,6 +51,15 @@ def _discover_scrcpy() -> str | None:
     for c in common:
         if c.is_file():
             return str(c)
+    # 0-setup_environment.ps1 extracts the release into a versioned subdir
+    # (~/.android-mcp-tools/scrcpy/scrcpy-win64-vX.Y/scrcpy.exe), so glob for it.
+    exe = "scrcpy.exe" if os.name == "nt" else "scrcpy"
+    for root in (Path.home() / ".android-mcp-tools" / "scrcpy",
+                 Path.home() / ".android-mcp-tools"):
+        if root.is_dir():
+            hits = sorted(root.glob("**/" + exe))
+            if hits:
+                return str(hits[0])
     return None
 
 

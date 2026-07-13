@@ -44,14 +44,15 @@ $RepoDir = Split-Path $PSScriptRoot -Parent
 # Load tool env vars from user scope into this session so the server discovers
 # jadx/apktool/java/adb even when launched from a terminal opened before
 # 0-setup_environment.ps1 ran (avoids the "restart in a new terminal" gotcha).
-foreach ($name in @("JAVA_HOME", "JADX_PATH", "APKTOOL_PATH", "ADB_PATH")) {
+foreach ($name in @("JAVA_HOME", "JADX_PATH", "APKTOOL_PATH", "ADB_PATH", "SCRCPY_PATH")) {
     $val = [Environment]::GetEnvironmentVariable($name, "User")
     if ($val) { Set-Item -Path "Env:$name" -Value $val }
 }
-# Ensure java + adb (their bin dirs) are on PATH for this session.
+# Ensure java + adb (+ scrcpy's dir) are on PATH for this session.
 $pathAdds = @()
-if ($env:JAVA_HOME) { $pathAdds += (Join-Path $env:JAVA_HOME "bin") }
-if ($env:ADB_PATH)  { $pathAdds += $env:ADB_PATH }
+if ($env:JAVA_HOME)   { $pathAdds += (Join-Path $env:JAVA_HOME "bin") }
+if ($env:ADB_PATH)    { $pathAdds += $env:ADB_PATH }
+if ($env:SCRCPY_PATH) { $pathAdds += (Split-Path $env:SCRCPY_PATH -Parent) }
 if ($pathAdds.Count -gt 0) { $env:PATH = ($pathAdds -join ";") + ";" + $env:PATH }
 
 $venvPy = Join-Path $RepoDir ".venv\Scripts\python.exe"
