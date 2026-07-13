@@ -70,8 +70,18 @@ apktool:
   # APKTOOL_PATH environment variable. If empty, PATH/common dirs are checked.
   # path: "C:/Users/you/.android-mcp-tools/apktool/apktool.bat"
 
+# Report evidence images (optional)
+# render_code_image / render_log_evidence / render_flow_diagram save PNGs here.
+# Set output_dir to a path the report renderer (malware-report-renderer's
+# render_report.py, which may run in a separate sandbox) can ALSO read, so the
+# "official" evidence PNGs are visible to it. Can also be set via the
+# MCP_REPORTS_DIR environment variable. Default: <workspace>/reports.
+reports:
+  # output_dir: "C:/Users/you/Claude/Projects/Android Analysis/_evidence"
+
 # Environment variable / CLI overrides (priority: CLI > env > config):
-#   MCP_TRANSPORT, MCP_HOST, MCP_PORT, MCP_AUTH_TOKEN, JADX_PATH, APKTOOL_PATH
+#   MCP_TRANSPORT, MCP_HOST, MCP_PORT, MCP_AUTH_TOKEN, JADX_PATH, APKTOOL_PATH,
+#   MCP_REPORTS_DIR
 #   --transport, --host, --port
 
 # Device usage scenarios:

@@ -241,7 +241,13 @@ screenMirrorManager = ScreenMirrorManager(deviceManager, output_dir=_workspace)
 repackageManager = RepackageManager(
     deviceManager, output_dir=_workspace,
     apktool_path=os.environ.get("APKTOOL_PATH") or _apktool_config.get("path") or None)
-codeRenderer = CodeImageRenderer(output_dir=_workspace)
+# Report evidence images. reports_dir (env MCP_REPORTS_DIR or config reports.output_dir)
+# overrides where PNGs land, so a separate report-renderer sandbox can read them
+# from a shared/mounted path; else defaults to <workspace>/reports.
+_reports_dir = (os.environ.get("MCP_REPORTS_DIR")
+                or (_config.get("reports") or {}).get("output_dir")
+                or None)
+codeRenderer = CodeImageRenderer(output_dir=_workspace, reports_dir=_reports_dir)
 # Baseline capture/diff (before-after dynamic analysis). Read-only; operates on
 # the active device and stores per-run snapshots in the workspace.
 baselineManager = BaselineManager(deviceManager, output_dir=_workspace)
@@ -964,6 +970,37 @@ def render_log_evidence(
     path = codeRenderer.render_log_evidence(
         text, annotations=annotations, highlight_lines=highlight_lines,
         title=title, start_line=start_line)
+    return [Image(path=path), f"path: {path}"]
+
+
+@mcp.tool(structured_output=False)
+def render_flow_diagram(
+    nodes: list[str],
+    edges: list[str],
+    malicious: list[str] | None = None,
+    aux: list[str] | None = None,
+    title: str = "",
+) -> list:
+    """Render a class/function call-flow diagram (house style) for the report.
+
+    Put this at the TOP of the report's "악성 행위 정보" section, before the code
+    evidence, so the reader grasps the whole call path first. Deterministic
+    dark-theme PNG (matches render_log_evidence). No Graphviz needed.
+    Args:
+        nodes (list[str]): Each 'id' or 'id|label'; the label may contain '\\n'
+            for a multi-line box (e.g. "query|ContentResolver.query()\\n연락처·SMS").
+        edges (list[str]): Each 'src -> dst' (node ids).
+        malicious (list[str]): Node ids and/or 'src -> dst' edges to mark RED
+            (the malicious/dangerous path); edges between two malicious nodes turn
+            red automatically.
+        aux (list[str]): Node ids and/or edges to mark slate (auxiliary/safe path).
+        title (str): Caption above (e.g. "[증거8] 클래스/함수 흐름도").
+    Returns:
+        list: an inline PNG preview + a ``path: <absolute path>`` line (saved under
+        the reports dir); embed that path in the .md/.docx report.
+    """
+    path = codeRenderer.render_flow_diagram(
+        nodes, edges, malicious=malicious, aux=aux, title=title)
     return [Image(path=path), f"path: {path}"]
 
 

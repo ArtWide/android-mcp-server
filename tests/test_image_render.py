@@ -106,3 +106,52 @@ class TestLogEvidence:
             annotations=[{"line": 2, "text": "빈줄"}, {"line": 99, "text": "oob"},
                          {"line": 1, "text": "ok"}])
         assert os.path.isfile(p)
+
+
+class TestFlowDiagram:
+    def test_produces_png(self, tmp_path):
+        r = CodeImageRenderer(output_dir=str(tmp_path))
+        p = r.render_flow_diagram(
+            nodes=["a|onCreate()", "b|i4.a() [수집]", "c|POST /upload"],
+            edges=["a -> b", "b -> c"],
+            malicious=["b", "c"], aux=[], title="[증거8] 흐름도")
+        assert os.path.isfile(p)
+        with Image.open(p) as im:
+            assert im.format == "PNG" and im.size[0] > 100
+
+    def test_edge_parsing_and_arrow_form(self, tmp_path):
+        r = CodeImageRenderer(output_dir=str(tmp_path))
+        assert CodeImageRenderer._parse_edge("x -> y") == ("x", "y")
+        assert CodeImageRenderer._parse_edge("x->y") == ("x", "y")
+        assert CodeImageRenderer._parse_edge("x → y") == ("x", "y")
+        assert CodeImageRenderer._parse_edge("no arrow") is None
+
+    def test_auto_adds_unknown_edge_endpoints(self, tmp_path):
+        # edge referencing a node not in `nodes` must not crash (auto-added)
+        r = CodeImageRenderer(output_dir=str(tmp_path))
+        p = r.render_flow_diagram(nodes=["a"], edges=["a -> ghost"], malicious=["a -> ghost"])
+        assert os.path.isfile(p)
+
+    def test_cycle_does_not_hang(self, tmp_path):
+        r = CodeImageRenderer(output_dir=str(tmp_path))
+        p = r.render_flow_diagram(nodes=["a", "b"], edges=["a -> b", "b -> a"])
+        assert os.path.isfile(p)
+
+    def test_id_without_label(self, tmp_path):
+        r = CodeImageRenderer(output_dir=str(tmp_path))
+        p = r.render_flow_diagram(nodes=["start", "end"], edges=["start -> end"])
+        assert os.path.isfile(p)
+
+
+class TestReportsDir:
+    def test_reports_dir_overrides_output_dir(self, tmp_path):
+        shared = tmp_path / "shared_reports"
+        r = CodeImageRenderer(output_dir=str(tmp_path / "ws"), reports_dir=str(shared))
+        assert r.outdir == shared
+        p = r.render_code_image("int a=1;", language="java")
+        assert os.path.isfile(p)
+        assert str(shared) in p  # PNG landed in the shared/mounted path
+
+    def test_default_is_workspace_reports(self, tmp_path):
+        r = CodeImageRenderer(output_dir=str(tmp_path))
+        assert r.outdir.name == "reports"

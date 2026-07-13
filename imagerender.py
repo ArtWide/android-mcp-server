@@ -46,6 +46,20 @@ _D_GREEN = (126, 197, 122)    # # comments + >> annotations
 _D_RED = (224, 78, 78)        # boxes
 _D_CONNECT = (96, 102, 116)   # box -> annotation connector
 
+# Flow-diagram theme (class/function call flow; malicious path highlighted).
+_F_BG = (24, 30, 41)
+_F_PANEL = (44, 56, 74)
+_F_INK = (223, 231, 242)
+_F_MUTE = (139, 158, 186)
+_F_TITLE = (159, 179, 214)
+# kind -> (border, fill)
+_F_KIND = {
+    "mal": ((224, 86, 86), (58, 32, 36)),
+    "aux": ((120, 137, 160), (34, 44, 60)),
+    "normal": ((79, 140, 210), (28, 46, 74)),
+}
+_F_EDGE = {"mal": (224, 86, 86), "aux": (120, 137, 160), "normal": (120, 137, 160)}
+
 _CODE_FONT_CANDIDATES = [
     os.environ.get("CODE_FONT_PATH", ""),
     "C:/Windows/Fonts/consola.ttf",
@@ -128,8 +142,16 @@ def _merge_ranges(nums: list[int]) -> list[tuple[int, int]]:
 
 
 class CodeImageRenderer:
-    def __init__(self, output_dir: str | None = None, font_size: int = 18) -> None:
-        self.outdir = (Path(output_dir) if output_dir else DEFAULT_WORKSPACE) / "reports"
+    def __init__(self, output_dir: str | None = None, font_size: int = 18,
+                 reports_dir: str | None = None) -> None:
+        # Where the rendered PNGs land. `reports_dir` (from config/env) is used
+        # verbatim when given, so the analyst can point it at a path the report
+        # renderer (render_report.py, a separate sandbox) can also read; else
+        # default to <workspace>/reports.
+        if reports_dir:
+            self.outdir = Path(reports_dir)
+        else:
+            self.outdir = (Path(output_dir) if output_dir else DEFAULT_WORKSPACE) / "reports"
         self.font_size = font_size
 
     def render_code_image(
@@ -370,6 +392,163 @@ class CodeImageRenderer:
 
         self.outdir.mkdir(parents=True, exist_ok=True)
         stem = f"log-{abs(hash((text, title, tuple(sorted(ann_by_line.items()))))) & 0xffffffff:08x}"
+        path = self.outdir / f"{stem}.png"
+        img.save(path, "PNG")
+        return str(path)
+
+    # ---- flow diagram (class/function call flow) --------------------------
+    @staticmethod
+    def _parse_edge(s: str):
+        """'src -> dst' (or 'src->dst') -> (src, dst); None if malformed."""
+        for sep in ("->", "→"):
+            if sep in s:
+                a, b = s.split(sep, 1)
+                return a.strip(), b.strip()
+        return None
+
+    def render_flow_diagram(
+        self,
+        nodes: list[str],
+        edges: list[str],
+        malicious: list[str] | None = None,
+        aux: list[str] | None = None,
+        title: str = "",
+    ) -> str:
+        """Render a class/function call-flow diagram (deterministic house style).
+
+        nodes: 'id' or 'id|label' (label may contain '\\n' for multi-line).
+        edges: 'src -> dst'. malicious/aux: node ids and/or 'src -> dst' edges to
+        colour red / slate; edges between two malicious nodes turn red
+        automatically. Layered top-down layout; returns the saved PNG path.
+        """
+        import math
+
+        malicious = malicious or []
+        aux = aux or []
+
+        # -- parse nodes (preserve order) --
+        labels: dict[str, str] = {}
+        for item in nodes:
+            nid, sep, lbl = item.partition("|")
+            nid = nid.strip()
+            if not nid:
+                continue
+            labels[nid] = (lbl.strip() if sep else nid)
+
+        # -- parse edges; auto-add unknown endpoints so nothing is dropped --
+        parsed: list[tuple[str, str]] = []
+        for e in edges:
+            pair = self._parse_edge(e)
+            if not pair:
+                continue
+            for end in pair:
+                labels.setdefault(end, end)
+            parsed.append(pair)
+
+        mal_nodes = {m.strip() for m in malicious if not self._parse_edge(m)}
+        aux_nodes = {a.strip() for a in aux if not self._parse_edge(a)}
+        mal_edges = {self._parse_edge(m) for m in malicious if self._parse_edge(m)}
+        aux_edges = {self._parse_edge(a) for a in aux if self._parse_edge(a)}
+
+        def node_kind(n):
+            if n in mal_nodes:
+                return "mal"
+            if n in aux_nodes:
+                return "aux"
+            return "normal"
+
+        def edge_kind(s, d):
+            if (s, d) in mal_edges or (node_kind(s) == "mal" and node_kind(d) == "mal"):
+                return "mal"
+            if (s, d) in aux_edges or node_kind(s) == "aux" or node_kind(d) == "aux":
+                return "aux"
+            return "normal"
+
+        # -- longest-path rank (bounded iterations => cycle-safe) --
+        rank = {n: 0 for n in labels}
+        for _ in range(len(labels)):
+            changed = False
+            for s, d in parsed:
+                if rank[d] < rank[s] + 1:
+                    rank[d] = rank[s] + 1
+                    changed = True
+            if not changed:
+                break
+        layers: dict[int, list[str]] = {}
+        for n in labels:
+            layers.setdefault(rank[n], []).append(n)
+
+        fb = _load_font(_KR_FONT_CANDIDATES, 17)
+        ft = _load_font(_KR_FONT_CANDIDATES, 20)
+        fs = _load_font(_KR_FONT_CANDIDATES, 13)
+        probe = ImageDraw.Draw(PILImage.new("RGB", (4, 4)))
+
+        def measure(label):
+            lines = label.split("\n")
+            w = max(probe.textbbox((0, 0), ln, font=fb)[2] for ln in lines)
+            lh = probe.textbbox((0, 0), "Ag힣", font=fb)[3] + 4
+            return int(w + 36), int(lh * len(lines) + 22), lines, lh
+
+        size = {n: measure(labels[n]) for n in labels}
+        W = 980
+        col_gap, row_gap, top = 54, 74, 76
+        pos: dict[str, tuple] = {}
+        y = top
+        for r in sorted(layers):
+            ns = layers[r]
+            rw = sum(size[n][0] for n in ns) + col_gap * (len(ns) - 1)
+            rh = max(size[n][1] for n in ns)
+            x = (W - rw) / 2
+            for n in ns:
+                w, h = size[n][0], size[n][1]
+                pos[n] = (x, y + (rh - h) / 2, w, h)
+                x += w + col_gap
+            y += rh + row_gap
+        H = int(y - row_gap + 48)
+        W = int(max(W, max((p[0] + p[2] for p in pos.values()), default=W) + 40))
+
+        img = PILImage.new("RGB", (W, H), _F_BG)
+        d = ImageDraw.Draw(img)
+        if title:
+            d.text((28, 24), title, font=ft, fill=_F_TITLE)
+            d.line((28, 60, W - 28, 60), fill=_F_PANEL, width=2)
+
+        def ctop(n): x, yy, w, h = pos[n]; return (x + w / 2, yy)
+        def cbot(n): x, yy, w, h = pos[n]; return (x + w / 2, yy + h)
+
+        def arrow(p1, p2, color, wd):
+            d.line((*p1, *p2), fill=color, width=wd)
+            a = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
+            for da in (2.6, -2.6):
+                d.line((p2[0], p2[1], p2[0] - 12 * math.cos(a + da),
+                        p2[1] - 12 * math.sin(a + da)), fill=color, width=wd)
+
+        for s, dd in parsed:
+            k = edge_kind(s, dd)
+            arrow(cbot(s), ctop(dd), _F_EDGE[k], 3 if k == "mal" else 2)
+
+        for n in labels:
+            x, yy, w, h = pos[n]
+            bc, fc = _F_KIND[node_kind(n)]
+            d.rounded_rectangle((x, yy, x + w, yy + h), radius=9, fill=fc, outline=bc, width=2)
+            _, _, lines, lh = size[n]
+            ty = yy + (h - lh * len(lines)) / 2
+            for ln in lines:
+                b = probe.textbbox((0, 0), ln, font=fb)
+                d.text((x + (w - (b[2] - b[0])) / 2, ty), ln, font=fb, fill=_F_INK)
+                ty += lh
+
+        ly = H - 30
+        d.rounded_rectangle((28, ly, 46, ly + 13), radius=3,
+                            fill=_F_KIND["mal"][1], outline=_F_KIND["mal"][0], width=2)
+        d.text((52, ly - 3), "악성/위험 경로", font=fs, fill=_F_MUTE)
+        d.rounded_rectangle((190, ly, 208, ly + 13), radius=3,
+                            fill=_F_KIND["aux"][1], outline=_F_KIND["aux"][0], width=2)
+        d.text((214, ly - 3), "보조/안전 경로", font=fs, fill=_F_MUTE)
+
+        self.outdir.mkdir(parents=True, exist_ok=True)
+        key = (tuple(nodes), tuple(edges), tuple(malicious), tuple(aux), title)
+        stem = f"flow-{abs(hash(key)) & 0xffffffff:08x}"
         path = self.outdir / f"{stem}.png"
         img.save(path, "PNG")
         return str(path)

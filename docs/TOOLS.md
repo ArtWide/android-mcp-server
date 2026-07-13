@@ -3,7 +3,7 @@
 Canonical list of the analysis tools this MCP server exposes. Generated from the
 `@mcp.tool()` registrations in `server.py`; keep it in sync when tools change.
 
-**Total: 54 tools.** A `target` argument is an installed **package name OR a path
+**Total: 55 tools.** A `target` argument is an installed **package name OR a path
 to a local `.apk` file** (so uploaded droppers / downloaded payloads can be
 analyzed without a device). Tools operate on the **active device** — when several
 are connected, pick it with `select_device`.
@@ -23,8 +23,8 @@ are connected, pick it with `select_device`.
 | Frida (dynamic instrumentation) | 12 |
 | Non-root repackaging | 2 |
 | Network capture (mitmproxy) | 5 |
-| Report evidence rendering | 2 |
-| **Total** | **54** |
+| Report evidence rendering | 3 |
+| **Total** | **55** |
 
 ---
 
@@ -149,11 +149,12 @@ Opens a native window **on the analyst PC** (not a feed inside the Claude client
 | `network_stop_capture` | — | Stop capture and clear the device proxy / adb reverse. |
 | `network_status` | — | Whether a capture is running. |
 
-## Report evidence rendering (2)
+## Report evidence rendering (3)
 
-House-style, deterministic PNGs for the analysis report (use these, not ad-hoc artifacts).
+House-style, deterministic PNGs for the analysis report (use these, not ad-hoc artifacts). Output dir is `<workspace>/reports` by default, or `reports.output_dir` / `MCP_REPORTS_DIR` (set it to a path the report renderer can also read).
 
 | Tool | Args | Description |
 |------|------|-------------|
 | `render_code_image` | `code`, `language`, `highlight_lines`, `annotations`, `title`, `start_line` | Annotated code snippet → light-theme PNG (red boxes + inline `//` notes). |
 | `render_log_evidence` | `text`, `annotations`, `highlight_lines`, `title`, `start_line` | Log/packet evidence → dark-theme PNG with a right-side `>>` annotation column. |
+| `render_flow_diagram` | `nodes`, `edges`, `malicious`, `aux`, `title` | Class/function call-flow diagram → dark-theme PNG; malicious path red, aux slate. Put at the top of 악성 행위 정보. |
