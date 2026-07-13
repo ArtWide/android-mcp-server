@@ -54,7 +54,7 @@ traffic", "tap this button / automate this screen", "why is the app crashing"
 - `network_list_flows(limit)` — captured requests/responses. `network_stop_capture`, `network_status`.
 
 **Live screen mirror (scrcpy — host window, not an in-chat feed)**
-- `start_screen_mirror(max_size, record)` — open a real-time scrcpy mirror of the active device ON THE ANALYST PC (mouse/keyboard control it); `record=True` saves an mp4 for evidence. Use to watch a sample run live. Needs scrcpy on the host (`0-setup_environment.ps1 -SetupScrcpy`); if the screen is off, `wake_device` first.
+- `start_screen_mirror(max_size, record)` — open a real-time scrcpy mirror of the active device ON THE ANALYST PC (mouse/keyboard control it); `record=True` saves an mp4 for evidence. Use to watch a sample run live. scrcpy is installed by default by the setup (re-run the installer if missing); if the screen is off, `wake_device` first.
 - `stop_screen_mirror`, `screen_mirror_status`.
 
 ## Workflows (recipes)

@@ -19,10 +19,10 @@ _HERE = Path(__file__).parent
 DEFAULT_WORKSPACE = _HERE / "workspace"
 
 _INSTALL_HINT = (
-    "scrcpy not found. Install it and ensure `scrcpy` is on PATH (or set the "
-    "SCRCPY_PATH env var). Windows: `winget install Genymobile.scrcpy` or the "
-    "release zip from https://github.com/Genymobile/scrcpy/releases. "
-    "scripts/0-setup_environment.ps1 -SetupScrcpy also installs it."
+    "scrcpy not found. It is installed by default by the setup — re-run the "
+    "installer (install-inetcop) or `scripts/0-setup_environment.ps1` to fetch "
+    "it, then restart the server so SCRCPY_PATH is picked up. Manual alternative: "
+    "`winget install Genymobile.scrcpy`, or put scrcpy on PATH / set SCRCPY_PATH."
 )
 
 

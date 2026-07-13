@@ -68,7 +68,9 @@ function Test-SetupDone {
     $java = [Environment]::GetEnvironmentVariable("JAVA_HOME", "User")
     $hasAdb = [bool](Get-Command adb -ErrorAction SilentlyContinue) -or
               [bool][Environment]::GetEnvironmentVariable("ADB_PATH", "User")
-    return ($jadx -and (Test-Path $jadx) -and $java -and (Test-Path $java) -and $hasAdb)
+    $scrcpy = [bool](Get-Command scrcpy -ErrorAction SilentlyContinue) -or
+              [bool][Environment]::GetEnvironmentVariable("SCRCPY_PATH", "User")
+    return ($jadx -and (Test-Path $jadx) -and $java -and (Test-Path $java) -and $hasAdb -and $scrcpy)
 }
 
 Write-Host "Android MCP Server - one-click setup & run" -ForegroundColor Cyan
@@ -91,7 +93,7 @@ if ($SkipSetup) {
 } elseif (-not $ForceSetup -and (Test-SetupDone)) {
     Banner 0 "Tools already installed - skipping (use -ForceSetup to redo)"
 } else {
-    Banner 0 "Installing tools (ADB / Java / JADX / apktool / Frida)"
+    Banner 0 "Installing tools (ADB / Java / JADX / apktool / Frida / scrcpy)"
     $a = @()
     if ($Frida) { $a = @("-SetupFridaServer") }
     Invoke-Step "0-setup_environment.ps1" $a
