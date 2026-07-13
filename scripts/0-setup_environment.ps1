@@ -40,6 +40,8 @@ param(
     [int]$JavaFeatureVersion = 17,
     [switch]$SetupFridaServer,
     [switch]$StartFridaServer,
+    # Also install scrcpy (live screen mirror for start_screen_mirror). Opt-in.
+    [switch]$SetupScrcpy,
     # Comma/space-separated list of steps to skip: Adb, Java, Jadx, Apktool, Frida
     # (a string so it works reliably when this script is invoked via -File).
     [string]$Skip = ""
@@ -265,6 +267,49 @@ if (Has-Command "mitmdump") {
 } else {
     Write-Warn "mitmdump not found. For network_* tools install mitmproxy: winget install mitmproxy"
     $summary["mitmproxy"] = "NOT installed (optional)"
+}
+
+# ===========================================================================
+# 7. (optional) scrcpy - live device screen mirror (start_screen_mirror)
+# ===========================================================================
+if ($SetupScrcpy) {
+    if ($env:SCRCPY_PATH -and (Test-Path $env:SCRCPY_PATH)) {
+        Write-Step "scrcpy already configured: $env:SCRCPY_PATH"
+        $summary["scrcpy"] = "already present"
+    } elseif (Has-Command "scrcpy") {
+        Write-Step "scrcpy already on PATH"
+        $summary["scrcpy"] = "already on PATH"
+    } else {
+        Write-Step "Installing latest scrcpy (win64)"
+        $rel = Invoke-RestMethod -UseBasicParsing `
+            -Uri "https://api.github.com/repos/Genymobile/scrcpy/releases/latest" `
+            -Headers @{ "User-Agent" = "android-mcp-installer" }
+        $asset = $rel.assets |
+            Where-Object { $_.name -match '^scrcpy-win64-.*\.zip$' } |
+            Select-Object -First 1
+        if (-not $asset) { throw "No scrcpy-win64-*.zip asset in latest release." }
+        $scrcpyZip = Join-Path $downloadDir $asset.name
+        Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -OutFile $scrcpyZip
+        $scrcpyDir = Join-Path $InstallDir "scrcpy"
+        if (Test-Path $scrcpyDir) { Remove-Item -Recurse -Force $scrcpyDir }
+        Expand-Archive -Path $scrcpyZip -DestinationPath $scrcpyDir -Force
+        $scrcpyExe = Get-ChildItem -Path $scrcpyDir -Recurse -Filter "scrcpy.exe" | Select-Object -First 1
+        if (-not $scrcpyExe) { throw "scrcpy.exe not found after extraction." }
+        [Environment]::SetEnvironmentVariable("SCRCPY_PATH", $scrcpyExe.FullName, "User")
+        $env:SCRCPY_PATH = $scrcpyExe.FullName
+        Add-UserPath $scrcpyExe.Directory.FullName   # bundled adb/server on PATH
+        Write-Ok "scrcpy $($rel.tag_name) at $($scrcpyExe.FullName) (SCRCPY_PATH set)"
+        $summary["scrcpy"] = "installed $($rel.tag_name)"
+    }
+} else {
+    Write-Step "Checking scrcpy (live screen mirror)"
+    if ((Has-Command "scrcpy") -or ($env:SCRCPY_PATH -and (Test-Path $env:SCRCPY_PATH))) {
+        Write-Ok "scrcpy found"
+        $summary["scrcpy"] = "already present"
+    } else {
+        Write-Warn "scrcpy not found. For start_screen_mirror install it: re-run with -SetupScrcpy (or 'winget install Genymobile.scrcpy')"
+        $summary["scrcpy"] = "NOT installed (optional)"
+    }
 }
 
 # ===========================================================================

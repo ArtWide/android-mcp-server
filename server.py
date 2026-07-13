@@ -15,6 +15,7 @@ from jadxmanager import JadxManager
 from networkmanager import NetworkCaptureManager
 from readiness import dynamic_readiness
 from repackagemanager import RepackageManager
+from screenmirror import ScreenMirrorManager
 from staticmanager import StaticAnalysisManager
 
 CONFIG_FILE = "config.yaml"
@@ -236,6 +237,7 @@ apktoolManager = ApktoolManager(
     output_dir=_workspace,
 )
 networkManager = NetworkCaptureManager(deviceManager, output_dir=_workspace)
+screenMirrorManager = ScreenMirrorManager(deviceManager, output_dir=_workspace)
 repackageManager = RepackageManager(
     deviceManager, output_dir=_workspace,
     apktool_path=os.environ.get("APKTOOL_PATH") or _apktool_config.get("path") or None)
@@ -331,6 +333,45 @@ def get_screenshot() -> Image:
         return Image(path=path)
     except Exception as e:
         raise RuntimeError(f"Failed to capture screenshot: {e}") from e
+
+
+@mcp.tool()
+def start_screen_mirror(max_size: int = 0, record: bool = False) -> str:
+    """Open a LIVE scrcpy mirror of the active device's screen on the analyst PC.
+
+    Real-time, low-latency; the analyst can also control the device with
+    mouse/keyboard. This opens a native window on the host running the server,
+    NOT a video feed inside the Claude client (MCP has no live-video channel).
+    Ideal for watching a sample run during dynamic analysis. Needs scrcpy on the
+    host. If it fails, the raw scrcpy log is returned (try wake_device first if
+    the screen is off).
+    Args:
+        max_size (int): Cap the longer screen side in px (0 = native). Lower it
+                        (e.g. 1024) for smoother mirroring over a slow link.
+        record (bool): Also record the session to workspace/screen/<serial>-<ts>.mp4
+                       (useful as report evidence).
+    Returns:
+        str: Start status (pid, recording path) or the scrcpy error log
+    """
+    return screenMirrorManager.start(max_size=max_size, record=record)
+
+
+@mcp.tool()
+def stop_screen_mirror() -> str:
+    """Stop the running scrcpy screen mirror (and finalize any recording).
+    Returns:
+        str: Stop status, including the saved recording path if one was made
+    """
+    return screenMirrorManager.stop()
+
+
+@mcp.tool()
+def screen_mirror_status() -> str:
+    """Report whether a scrcpy screen mirror is currently running.
+    Returns:
+        str: Running state (device serial, pid, recording path) or 'not running'
+    """
+    return screenMirrorManager.status()
 
 
 @mcp.tool()
