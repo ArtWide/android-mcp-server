@@ -101,6 +101,7 @@ traffic", "tap this button / automate this screen", "why is the app crashing"
 - **Privacy.** Screenshots and UI dumps can expose personal data; surface only what's needed.
 - **Resolve package names** with `get_packages` when the user gives an app name rather than a package id.
 - **Report faithfully.** If a tool errors (unauthorized device, no frida-server, jadx/apktool not installed), relay the message and the fix (USB debugging prompt; `scripts/0-setup_environment.ps1`; `scripts/1-setup_frida_server.ps1`) instead of guessing.
+- **Clean up what you install/push.** If you install an app or push files to analyze them, capture `capture_baseline("pre")` first, then afterwards remove the app (`pm uninstall`) and the pushed files and verify with `diff_baseline("pre","post-clean")` that the device is back to baseline — don't leave residual APKs/installs behind. (Malware runs follow the full teardown in the malware-analysis skill.)
 
 ## Authorization
 Only analyze devices and apps the user owns or is explicitly authorized to test
