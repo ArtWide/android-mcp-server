@@ -21,18 +21,26 @@ def _mgr(tmp_path):
 class TestScanSecrets:
     def test_categorizes_matches(self, tmp_path):
         mgr = _mgr(tmp_path)
+        # Synthetic, NON-secret fixtures built at runtime from parts, so no
+        # real-looking credential literal sits in the source (avoids
+        # secret-scanner false positives). These are dummy shapes only — not
+        # real keys — used to exercise scan_secrets' regexes.
+        google_key = "AIza" + "Sy" + "B" * 33            # AIza + 35 chars
+        jwt = "eyJ" + "a" * 10 + "." + "eyJ" + "b" * 10 + "." + "c" * 12
         strings = {
-            "AIzaSyA1234567890abcdefghijklmnopqrstuvw",  # Google API key (39 chars after AIza? pattern needs 35)
-            "AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ0123456",
+            google_key,
+            jwt,
             "https://api.example.com/v1/login",
             "http://10.0.0.1/health",
             "10.0.0.1",
             "just a normal string",
-            "eyJabcdefgh.eyJpayload1.signature99",
+            "another benign value",
         }
         with patch.object(mgr, "_load", return_value=MagicMock()), \
                 patch.object(mgr, "_dex_strings", return_value=strings):
             out = mgr.scan_secrets("com.x")
+        assert "Google API key" in out    # the synthetic AIza key is detected
+        assert "JWT" in out
         assert "URL" in out
         assert "https://api.example.com/v1/login" in out
         assert "IPv4 address" in out
