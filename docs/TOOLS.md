@@ -3,14 +3,14 @@
 Canonical list of the analysis tools this MCP server exposes. Generated from the
 `@mcp.tool()` registrations in `server.py`; keep it in sync when tools change.
 
-**Total: 56 tools.** A `target` argument is an installed **package name OR a path
+**Total: 57 tools.** A `target` argument is an installed **package name OR a path
 to a local `.apk` file** (so uploaded droppers / downloaded payloads can be
 analyzed without a device). Tools operate on the **active device** — when several
 are connected, pick it with `select_device`.
 
 | Group | Count |
 |------|------|
-| Device control & selection | 3 |
+| Device control & selection / server info | 4 |
 | ADB shell / inspection / logs | 7 |
 | File transfer & install | 4 |
 | HTTPS CA trust | 2 |
@@ -24,17 +24,18 @@ are connected, pick it with `select_device`.
 | Non-root repackaging | 2 |
 | Network capture (mitmproxy) | 5 |
 | Report evidence rendering | 3 |
-| **Total** | **56** |
+| **Total** | **57** |
 
 ---
 
-## Device control & selection (3)
+## Device control & selection / server info (4)
 
 | Tool | Args | Description |
 |------|------|-------------|
-| `list_devices` | — | List connected devices (serial + model), marking the active one. |
+| `list_devices` | - | List connected devices (serial + model), marking the active one. |
 | `select_device` | `serial` | Switch the active device all subsequent tools operate on. |
-| `get_current_device` | — | Report the currently active device (serial + model). |
+| `get_current_device` | - | Report the currently active device (serial + model). |
+| `get_server_version` | - | Report the Android MCP server version (version + git commit) for the report header / bug reports. |
 
 ## ADB shell / inspection / logs (7)
 

@@ -10,7 +10,7 @@ time to discover. Read this before re-litigating transport/connector decisions.
   new process per client and killed long-running sessions like frida).
 - Recommended deployment: **per-analyst, on the PC the device is attached to**,
   bound to `127.0.0.1`. The powerful adb/jadx/frida surface stays off the network.
-- Tools: 56 total across ADB/logcat, device selection, file transfer/install,
+- Tools: 57 total across ADB/logcat, device selection, file transfer/install,
   CA trust (user + rooted system store), a dynamic-readiness preflight, baseline
   capture/diff, live screen mirror (scrcpy), JADX, androguard static, apktool,
   Frida, non-root repackaging, mitmproxy network capture, and report-evidence
@@ -166,7 +166,7 @@ just can't be launched there (no root).
 ## Verified tool status (current device)
 
 A point-in-time verification snapshot on the current device (not the full
-inventory — see [TOOLS.md](TOOLS.md) for all 56 tools):
+inventory — see [TOOLS.md](TOOLS.md) for all 57 tools):
 
 | Tool group | Status |
 |------------|--------|

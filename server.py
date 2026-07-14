@@ -1,5 +1,6 @@
 import argparse
 import os
+import subprocess
 import sys
 
 import yaml
@@ -30,6 +31,33 @@ DEFAULT_TRANSPORT = "streamable-http"
 # Override with host: "0.0.0.0" (+ auth_token) only for trusted-network setups.
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
+
+_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+_VERSION_CACHE = None
+
+
+def _server_version() -> str:
+    """Version string for the report header / bug reports: pyproject version +
+    short git commit of the running clone (both best-effort, cached)."""
+    global _VERSION_CACHE
+    if _VERSION_CACHE is not None:
+        return _VERSION_CACHE
+    ver = "0.1.0"
+    try:
+        import tomllib
+        with open(os.path.join(_REPO_DIR, "pyproject.toml"), "rb") as f:
+            ver = tomllib.load(f).get("project", {}).get("version", ver)
+    except Exception:
+        pass
+    gh = ""
+    try:
+        gh = subprocess.check_output(
+            ["git", "-C", _REPO_DIR, "rev-parse", "--short", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL, timeout=5).strip()
+    except Exception:
+        pass
+    _VERSION_CACHE = f"Android MCP v{ver}" + (f" ({gh})" if gh else "")
+    return _VERSION_CACHE
 
 
 def _load_config() -> dict:
@@ -299,6 +327,15 @@ def get_current_device() -> str:
         str: The active device
     """
     return deviceManager.get_current_device()
+
+
+@mcp.tool()
+def get_server_version() -> str:
+    """Report the Android MCP server version — for the report header and bug reports.
+    Returns:
+        str: e.g. 'Android MCP v0.1.0 (a7e8b44)' — version + short git commit
+    """
+    return _server_version()
 
 
 @mcp.tool()
