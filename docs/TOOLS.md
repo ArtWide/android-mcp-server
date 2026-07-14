@@ -3,7 +3,7 @@
 Canonical list of the analysis tools this MCP server exposes. Generated from the
 `@mcp.tool()` registrations in `server.py`; keep it in sync when tools change.
 
-**Total: 55 tools.** A `target` argument is an installed **package name OR a path
+**Total: 56 tools.** A `target` argument is an installed **package name OR a path
 to a local `.apk` file** (so uploaded droppers / downloaded payloads can be
 analyzed without a device). Tools operate on the **active device** — when several
 are connected, pick it with `select_device`.
@@ -15,7 +15,7 @@ are connected, pick it with `select_device`.
 | File transfer & install | 4 |
 | HTTPS CA trust | 2 |
 | Dynamic-analysis readiness | 1 |
-| Baseline (before/after) | 2 |
+| Baseline (before/after/restore) | 3 |
 | Live screen mirror (scrcpy) | 3 |
 | Static analysis (androguard) | 4 |
 | JADX (Java decompile) | 4 |
@@ -24,7 +24,7 @@ are connected, pick it with `select_device`.
 | Non-root repackaging | 2 |
 | Network capture (mitmproxy) | 5 |
 | Report evidence rendering | 3 |
-| **Total** | **55** |
+| **Total** | **56** |
 
 ---
 
@@ -70,14 +70,17 @@ are connected, pick it with `select_device`.
 |------|------|-------------|
 | `check_dynamic_readiness` | `cert_source` | One-shot preflight: device + root, Frida version match, mitmproxy + CA, HTTPS trust, capture, repackaging toolchain. |
 
-## Baseline — before/after (2)
+## Baseline — before/after/restore (3)
 
-Read-only device-state snapshots stored in the workspace (not KVault).
+Device-state snapshots stored in the workspace (not KVault). A `session`
+baseline is auto-captured at server startup; each analysis also captures a fresh
+`pre` (the device may differ between sessions).
 
 | Tool | Args | Description |
 |------|------|-------------|
 | `capture_baseline` | `label`, `watch_dirs` | Snapshot packages, processes, `/proc/net` sockets, device-admins, security settings, watched-dir files. Take `pre` and `post`. |
 | `diff_baseline` | `before`, `after` | Diff two snapshots → dropped packages, new C2 sockets, device-admin / accessibility / default-SMS changes, new files. |
+| `restore_baseline` | `before`, `after`, `apply` | Teardown: remove what `after` added vs `before` (uninstall new packages, delete new files, disable new device-admins, revert settings), then re-verify. `apply=False` = dry run. Refuses on device mismatch. |
 
 ## Live screen mirror — scrcpy (3)
 

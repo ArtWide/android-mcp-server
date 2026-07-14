@@ -248,9 +248,25 @@ _reports_dir = (os.environ.get("MCP_REPORTS_DIR")
                 or (_config.get("reports") or {}).get("output_dir")
                 or None)
 codeRenderer = CodeImageRenderer(output_dir=_workspace, reports_dir=_reports_dir)
-# Baseline capture/diff (before-after dynamic analysis). Read-only; operates on
-# the active device and stores per-run snapshots in the workspace.
+# Baseline capture/diff/restore (before-after dynamic analysis). Operates on the
+# active device and stores per-run snapshots in the workspace.
 baselineManager = BaselineManager(deviceManager, output_dir=_workspace)
+
+
+def _capture_session_baseline() -> None:
+    """Snapshot a 'session' baseline at server startup — the device may differ
+    between sessions, so restore_baseline can tell a current baseline from a
+    stale one. Background + non-fatal so a slow/absent device never blocks
+    serving; each analysis still captures its own fresh 'pre' baseline."""
+    try:
+        baselineManager.capture_baseline("session")
+        print("Session baseline captured at startup (label 'session').")
+    except Exception as e:
+        print(f"Session baseline capture skipped: {e}", file=sys.stderr)
+
+
+import threading as _threading  # noqa: E402
+_threading.Thread(target=_capture_session_baseline, daemon=True).start()
 
 
 @mcp.tool()
@@ -455,6 +471,31 @@ def diff_baseline(before: str = "pre", after: str = "post") -> str:
         str: A structured, section-by-section diff
     """
     return baselineManager.diff_baseline(before, after)
+
+
+@mcp.tool()
+def restore_baseline(before: str = "pre", after: str = "post", apply: bool = False) -> str:
+    """Return the device to a baseline by removing what a sample added (teardown).
+
+    DESTRUCTIVE when apply=True: disables newly-activated device-admins,
+    uninstalls new third-party packages (the sample + dropped payloads), reverts
+    changed security settings (accessibility / default SMS·dialer), deletes new
+    files in the watched dirs, then re-captures 'post-clean' and re-diffs to
+    VERIFY the device matches the baseline. Only touches items NEW vs the
+    baseline (never pre-existing apps/files).
+
+    Run capture_baseline('pre') before the analysis and 'post' after; then use
+    this to clean up. Refuses if the baseline is for a different device than the
+    active one, and warns if it is from an earlier server session.
+    Args:
+        before (str): Baseline to restore to (default 'pre').
+        after (str): Snapshot whose additions are removed (default 'post').
+        apply (bool): False (default) = dry run (report the plan only). True =
+                      actually remove/revert, then verify.
+    Returns:
+        str: The removal plan (dry run) or the executed log + verification result
+    """
+    return baselineManager.restore_baseline(before, after, apply=apply)
 
 
 @mcp.tool()

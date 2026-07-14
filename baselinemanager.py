@@ -19,12 +19,18 @@ This is read-only: it never changes device state, so no undo is returned.
 
 import ipaddress
 import json
+import time
 from pathlib import Path
 
 from apkutils import sanitize_label
 
 _HERE = Path(__file__).parent
 DEFAULT_WORKSPACE = _HERE / "workspace"
+
+# Stamped into every snapshot so restore_baseline can tell whether a baseline is
+# from the current server session (the device may differ between sessions). Set
+# once at import (server start); a new server process => new session id.
+_SESSION_ID = time.strftime("%Y%m%d-%H%M%S")
 
 # Linux TCP states as reported in /proc/net/tcp{,6} (hex, column 4).
 _TCP_STATES = {
@@ -213,6 +219,7 @@ class BaselineManager:
         snap = {
             "serial": self._serial(),
             "label": label,
+            "session_id": _SESSION_ID,
             "device_time": self._sh("date").strip(),
             "packages": self._packages(),
             "processes": self._processes(),
@@ -334,3 +341,120 @@ class BaselineManager:
         if len(lines) == 2:
             lines.append("\n(no observable changes between the two snapshots)")
         return "\n".join(lines)
+
+    # -- restore (delete residuals, return to baseline) --------------------
+    def _added(self, b: dict, a: dict) -> dict:
+        """Residuals present in `a` but not `b`: the deletable/revertable set."""
+        added_pkgs = sorted(set(a["packages"]["all"]) - set(b["packages"]["all"]))
+        tp = a["packages"]["third_party"]  # pkg -> apk path; only these are uninstallable
+        files = []
+        for d, af in a.get("files", {}).items():
+            bf = b.get("files", {}).get(d, {})
+            files += sorted(set(af) - set(bf))
+        admins = sorted(set(a.get("device_admins", [])) - set(b.get("device_admins", [])))
+        changed = [(k, b["settings"].get(k, ""), v)
+                   for k, v in a.get("settings", {}).items()
+                   if v != b["settings"].get(k, "")]
+        return {"packages": added_pkgs, "third_party": tp, "files": files,
+                "admins": admins, "settings": changed}
+
+    def restore_baseline(self, before: str = "pre", after: str = "post",
+                         apply: bool = False) -> str:
+        """Return the device to its `before` baseline by removing what `after` added.
+
+        DESTRUCTIVE when apply=True: disables newly-activated device-admins,
+        uninstalls new third-party packages (sample + dropped payloads), reverts
+        changed security settings (accessibility / default SMS·dialer), and
+        deletes new files in the watched dirs — then re-captures 'post-clean' and
+        re-diffs to VERIFY the device matches the baseline.
+
+        Only touches items that are NEW vs the baseline (never pre-existing apps
+        /files). apply=False (default) is a dry run: it only reports the plan.
+        Guards: refuses if the baseline is for a different device than the active
+        one; warns if the baseline is from an earlier server session (the device
+        may have changed — re-capture a fresh baseline first).
+        """
+        b = self._resolve_snapshot(before)
+        a = self._resolve_snapshot(after)
+        active = self._serial()
+        if b.get("serial") != active:
+            raise RuntimeError(
+                f"Baseline '{before}' is for device {b.get('serial')}, but the "
+                f"active device is {active}. Capture a fresh baseline for the "
+                f"active device before restoring.")
+        warns = []
+        if b.get("session_id") and b.get("session_id") != _SESSION_ID:
+            warns.append(
+                f"baseline '{before}' is from an earlier server session "
+                f"({b.get('session_id')} != {_SESSION_ID}); the device may have "
+                f"changed since. Re-capture a fresh baseline if unsure.")
+
+        added = self._added(b, a)
+        to_uninstall = [p for p in added["packages"] if p in added["third_party"]]
+        non_tp = [p for p in added["packages"] if p not in added["third_party"]]
+
+        plan = []
+        plan.append(f"Restore {a.get('serial')} to baseline '{before}':")
+        plan.append(f"  uninstall packages ({len(to_uninstall)}): "
+                    + (", ".join(to_uninstall) or "-"))
+        if non_tp:
+            plan.append(f"  [!] new non-third-party packages (NOT auto-removed, review): "
+                        + ", ".join(non_tp))
+        plan.append(f"  disable device-admins ({len(added['admins'])}): "
+                    + (", ".join(added["admins"]) or "-"))
+        plan.append(f"  revert settings ({len(added['settings'])}): "
+                    + (", ".join(k for k, _, _ in added["settings"]) or "-"))
+        plan.append(f"  delete files ({len(added['files'])}): "
+                    + (", ".join(added["files"]) or "-"))
+        for w in warns:
+            plan.append(f"  WARN: {w}")
+
+        if not apply:
+            plan.append("\n(dry run — nothing changed. Re-run with apply=True to "
+                        "execute, then it re-verifies against the baseline.)")
+            return "\n".join(plan)
+
+        # ---- execute (destructive) ----
+        log = ["Restoring to baseline '%s' (apply=True):" % before]
+        # 1) device-admins first (blocks uninstall otherwise)
+        for comp in added["admins"]:
+            out = self._sh(f"dpm remove-active-admin {comp}", timeout=20)
+            if "Success" not in out and "success" not in out:
+                out = self._sh(f"su -c 'dpm remove-active-admin {comp}'", timeout=20)
+            log.append(f"  admin- {comp}: {out.strip()[:80] or 'done'}")
+        # 2) revert changed settings to the baseline value
+        for key, bval, _ in added["settings"]:
+            ns, _, skey = key.partition("/")
+            if bval in ("", "null"):
+                self._sh(f"settings delete {ns} {skey}", timeout=20)
+            else:
+                self._sh(f"settings put {ns} {skey} '{bval}'", timeout=20)
+            log.append(f"  setting~ {key} -> '{bval}'")
+        # 3) uninstall new third-party packages (sample + dropped payloads)
+        for pkg in to_uninstall:
+            out = self._sh(f"pm uninstall {pkg}", timeout=60)
+            if "Success" not in out:
+                out = self._sh(f"su -c 'pm uninstall {pkg}'", timeout=60) or out
+            log.append(f"  uninstall {pkg}: {out.strip()[:60] or 'done'}")
+        # 4) delete new files
+        for f in added["files"]:
+            self._sh(f"rm -f '{f}'", timeout=20)
+            self._sh(f"su -c \"rm -f '{f}'\"", timeout=20)  # app-private paths
+            log.append(f"  rm {f}")
+
+        # 5) verify
+        self.capture_baseline("post-clean", watch_dirs=a.get("watch_dirs"))
+        clean = self._resolve_snapshot("post-clean")
+        remaining = self._added(b, clean)
+        rem_pkgs = [p for p in remaining["packages"] if p in remaining["third_party"]]
+        ok = not (rem_pkgs or remaining["files"] or remaining["admins"])
+        log.append("")
+        log.append("--- verify: diff(%s, post-clean) ---" % before)
+        log.append("  remaining packages: " + (", ".join(rem_pkgs) or "none"))
+        log.append("  remaining files: " + (", ".join(remaining["files"]) or "none"))
+        log.append("  remaining device-admins: " + (", ".join(remaining["admins"]) or "none"))
+        log.append("  RESULT: " + ("RESTORED — device matches baseline ✓" if ok
+                                    else "RESIDUALS REMAIN — re-run or remove manually ✗"))
+        for w in warns:
+            log.append(f"  WARN: {w}")
+        return "\n".join(log)

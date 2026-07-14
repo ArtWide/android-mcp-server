@@ -29,6 +29,34 @@ class FakeDevice:
 
     def shell(self, cmd, timeout=None):
         s = self.state
+        import re
+        m = re.match(r"""su -c ['"](.*)['"]\s*$""", cmd, re.S)
+        inner = m.group(1) if m else cmd
+        # --- state-mutating commands (restore_baseline) ---
+        if inner.startswith("pm uninstall "):
+            pkg = inner.split()[-1]
+            s["packages"] = [p for p in s["packages"] if p != pkg]
+            s["third_party"].pop(pkg, None)
+            return "Success"
+        if inner.startswith("dpm remove-active-admin "):
+            comp = inner.split()[-1]
+            s["admins"] = [c for c in s.get("admins", []) if c != comp]
+            return "Success: Admin " + comp + " removed"
+        if inner.startswith("rm -f "):
+            path = inner[len("rm -f "):].strip().strip("'\"")
+            for d, lst in s.get("files", {}).items():
+                s["files"][d] = [f for f in lst if f != path]
+            return ""
+        if inner.startswith("settings put "):
+            p = inner[len("settings put "):].split(None, 2)
+            s.setdefault("settings", {})[f"{p[0]}/{p[1]}"] = (
+                p[2].strip().strip("'\"") if len(p) > 2 else "")
+            return ""
+        if inner.startswith("settings delete "):
+            p = inner[len("settings delete "):].split()
+            s.get("settings", {}).pop(f"{p[0]}/{p[1]}", None)
+            return ""
+        # --- read commands ---
         if cmd == "pm list packages":
             return "".join(f"package:{p}\n" for p in s["packages"])
         if cmd == "pm list packages -f -3":
@@ -140,3 +168,78 @@ class TestDiff:
         with pytest.raises(RuntimeError) as exc:
             mgr.diff_baseline("pre", "nope")
         assert "not found" in str(exc.value)
+
+
+def _clean_pre():
+    return {
+        "packages": ["com.android.chrome"],
+        "third_party": {},
+        "processes": ["system_server"],
+        "tcp": [],
+        "admins": [],
+        "settings": {"secure/sms_default_application": "com.android.messaging"},
+        "files": {"/data/local/tmp": [], "/sdcard/Download": [],
+                  "/sdcard/Android/data": []},
+    }
+
+
+def _dirty_post():
+    # after installing/running the sample: +2 packages, +admin, sms hijacked, +file
+    return {
+        "packages": ["com.android.chrome", "com.sample", "com.evil.payload"],
+        "third_party": {"com.sample": "/data/app/com.sample/base.apk",
+                        "com.evil.payload": "/data/app/com.evil.payload/base.apk"},
+        "processes": ["system_server", "com.sample"],
+        "tcp": [("0100007F:ABCD", "04030201:01BB", "01")],
+        "admins": ["com.evil.payload/.AdminRx"],
+        "settings": {"secure/sms_default_application": "com.evil.payload"},
+        "files": {"/data/local/tmp": ["/data/local/tmp/stage2.dex"],
+                  "/sdcard/Download": [], "/sdcard/Android/data": []},
+    }
+
+
+class TestRestore:
+    def _setup(self, tmp_path, serial="devA"):
+        mgr = _manager(tmp_path, serial, _clean_pre())
+        mgr.capture_baseline("pre")
+        mgr.dm.device.state = _dirty_post()
+        mgr.capture_baseline("post")
+        return mgr
+
+    def test_dry_run_reports_plan_without_changing(self, tmp_path):
+        mgr = self._setup(tmp_path)
+        out = mgr.restore_baseline("pre", "post", apply=False)
+        assert "dry run" in out
+        assert "com.sample" in out and "com.evil.payload" in out   # uninstall plan
+        assert "com.evil.payload/.AdminRx" in out                  # admin plan
+        # nothing removed
+        assert "com.evil.payload" in mgr.dm.device.state["packages"]
+
+    def test_apply_removes_and_verifies_restored(self, tmp_path):
+        mgr = self._setup(tmp_path)
+        out = mgr.restore_baseline("pre", "post", apply=True)
+        st = mgr.dm.device.state
+        assert st["packages"] == ["com.android.chrome"]           # sample+payload gone
+        assert st["admins"] == []                                  # admin disabled
+        assert st["settings"]["secure/sms_default_application"] == "com.android.messaging"
+        assert st["files"]["/data/local/tmp"] == []                # dropped file gone
+        assert "RESTORED" in out and "matches baseline" in out
+
+    def test_device_mismatch_raises(self, tmp_path):
+        mgr = self._setup(tmp_path)
+        pre = str(tmp_path / "baseline" / "devA_pre.json")
+        post = str(tmp_path / "baseline" / "devA_post.json")
+        mgr.dm.device = FakeDevice("devB", _dirty_post())          # switch active device
+        with pytest.raises(RuntimeError) as exc:
+            mgr.restore_baseline(pre, post, apply=True)
+        assert "different device" in str(exc.value) or "active device" in str(exc.value)
+
+    def test_stale_session_warns(self, tmp_path):
+        import json
+        mgr = self._setup(tmp_path)
+        pre_path = tmp_path / "baseline" / "devA_pre.json"
+        snap = json.loads(pre_path.read_text(encoding="utf-8"))
+        snap["session_id"] = "OLD-SESSION"
+        pre_path.write_text(json.dumps(snap), encoding="utf-8")
+        out = mgr.restore_baseline("pre", "post", apply=False)
+        assert "earlier server session" in out
