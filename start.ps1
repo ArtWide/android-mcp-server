@@ -46,7 +46,11 @@ param(
     [switch]$SkipSetup,
     [switch]$SkipRegister,
     [switch]$NoServer,
-    [int]$Port = 8000
+    [int]$Port = 8000,
+    # Folder of pre-bundled tool artifacts (uv.zip + the tool archives). When set,
+    # setup uses these local copies instead of downloading. Forwarded to the tool
+    # installer (0-setup_environment.ps1). Leave empty for the normal online path.
+    [string]$BundleDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,12 +80,40 @@ function Test-SetupDone {
 Write-Host "Android MCP Server - one-click setup & run" -ForegroundColor Cyan
 Write-Host "Repo: $RepoDir"
 
-# Pre-step: ensure the project venv exists.
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Host "uv not found on PATH. Install uv first: https://docs.astral.sh/uv/" -ForegroundColor Red
-    exit 1
-}
+# Pre-step: ensure the project venv. uv is only needed to CREATE the venv, so we
+# only fetch it when .venv is missing (avoids a spurious uv install on every
+# autostart run once the venv exists).
 if (-not (Test-Path (Join-Path $RepoDir ".venv"))) {
+    if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+        # Prefer the bundled uv.zip; else download uv.exe directly (a plain
+        # release-zip download, NOT the `irm | iex` remote-script pattern that AV
+        # flags). uv is a single self-contained binary.
+        $uvDir = Join-Path $env:USERPROFILE ".android-mcp-tools\uv"
+        New-Item -ItemType Directory -Force -Path $uvDir | Out-Null
+        $bundledUv = if ($BundleDir -and (Test-Path (Join-Path $BundleDir "uv.zip"))) { Join-Path $BundleDir "uv.zip" } else { $null }
+        if ($bundledUv) {
+            Write-Host "Installing uv from the bundled copy..." -ForegroundColor Yellow
+            Expand-Archive -Path $bundledUv -DestinationPath $uvDir -Force
+        } else {
+            Write-Host "uv not found - downloading uv.exe (astral.sh release)..." -ForegroundColor Yellow
+            try {
+                Invoke-WebRequest -UseBasicParsing -ErrorAction Stop `
+                    -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" `
+                    -OutFile (Join-Path $uvDir "uv.zip")
+                Expand-Archive -Path (Join-Path $uvDir "uv.zip") -DestinationPath $uvDir -Force -ErrorAction Stop
+            } catch { Write-Host "uv download failed: $_" -ForegroundColor Red }
+        }
+        if (Test-Path (Join-Path $uvDir "uv.exe")) {
+            $env:PATH = "$uvDir;" + $env:PATH
+            $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+            if ($userPath -notlike "*$uvDir*") { [Environment]::SetEnvironmentVariable("PATH", "$uvDir;$userPath", "User") }
+        }
+        if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+            Write-Host "uv unavailable. Install manually then re-run: https://docs.astral.sh/uv/ (or 'pip install uv')" -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "uv ready: $((Get-Command uv).Source)" -ForegroundColor Green
+    }
     Banner "sync" "Creating project environment (uv sync)"
     Push-Location $RepoDir
     try { & uv sync } finally { Pop-Location }
@@ -96,6 +128,7 @@ if ($SkipSetup) {
     Banner 0 "Installing tools (ADB / Java / JADX / apktool / Frida / scrcpy)"
     $a = @()
     if ($Frida) { $a = @("-SetupFridaServer") }
+    if ($BundleDir) { $a += @("-BundleDir", $BundleDir) }
     Invoke-Step "0-setup_environment.ps1" $a
 }
 
