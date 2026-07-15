@@ -75,6 +75,15 @@ if (Get-Command adb -ErrorAction SilentlyContinue) {
     Write-Host "[!] adb not found. Run scripts\0-setup_environment.ps1 first." -ForegroundColor Yellow
 }
 
+# Align the host frida binding to the analysis device's frida-server version
+# BEFORE launching the server. frida loads at import and can't be swapped live,
+# so doing this pre-launch avoids any server restart. Best-effort: never blocks
+# startup. Target = env FRIDA_VERSION > config frida.version > device autodetect.
+$alignScript = Join-Path $PSScriptRoot "align_frida.py"
+if ((Test-Path $venvPy) -and (Test-Path $alignScript)) {
+    try { & $venvPy $alignScript } catch { Write-Host "[!] frida align skipped: $_" -ForegroundColor Yellow }
+}
+
 $serverArgs = @()
 if ($Transport) { $serverArgs += @("--transport", $Transport) }
 if ($BindHost)  { $serverArgs += @("--host", $BindHost) }

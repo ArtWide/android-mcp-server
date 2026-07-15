@@ -70,6 +70,18 @@ apktool:
   # APKTOOL_PATH environment variable. If empty, PATH/common dirs are checked.
   # path: "C:/Users/you/.android-mcp-tools/apktool/apktool.bat"
 
+# Frida version alignment (optional)
+# The host frida binding and the device frida-server MUST be the same version.
+# frida loads when the server starts, so the launcher (scripts/3-run_server.ps1)
+# pins the host frida to the target BEFORE starting the server -> no restart.
+# Target resolution (first hit wins): env FRIDA_VERSION > this `version` > the
+# connected device's frida-server --version. Set `version` for a deterministic
+# pin -- recommended when the device may not be connected at startup (e.g. the
+# login-time autostart task), since device autodetect needs the device present.
+frida:
+  # version: "16.2.5"                            # pin host frida (blank = autodetect from device)
+  # server_path: "/data/local/tmp/frida-server"  # device frida-server path used for autodetect
+
 # Report evidence images (optional)
 # render_code_image / render_log_evidence / render_flow_diagram save PNGs here.
 # Set output_dir to a path the report renderer (malware-report-renderer's

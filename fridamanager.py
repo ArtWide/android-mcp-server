@@ -140,9 +140,13 @@ class FridaManager:
                            "exact match recommended.")
             else:
                 out.append(f"Result: MISMATCH — host major {host_major} != device "
-                           f"major {dev_major}. Frida will fail to connect. Push "
-                           f"frida-server {host} to the device, or run a separate MCP "
-                           "instance whose host frida matches this device.")
+                           f"major {dev_major}. Frida will fail to connect. Either "
+                           f"push frida-server {host} to the device (scripts/"
+                           "1-setup_frida_server.ps1), OR pin the host frida to the "
+                           f"device: set frida.version: \"{dev_ver}\" in config.yaml "
+                           "(or env FRIDA_VERSION) and restart the server -- the "
+                           "launcher (3-run_server.ps1 -> align_frida.py) aligns the "
+                           "host to the device automatically, no manual reinstall.")
         return "\n".join(out)
 
     def list_processes(self) -> str:
